@@ -234,4 +234,5 @@ app/src/main/java/com/personal/apptruyen/
 | kotlinx-collections-immutable | 0.3.8 | Compose stability (ImmutableList) |
 | profileinstaller | 1.4.1 | Baseline Profiles |
 | ktlint (gradle plugin) | 14.2.0 | Code style enforcement (hard guardrail) |
+| Timber | 5.0.1 | Structured logging (observability) |
 | compileSdk | 36 | Android SDK compilation target |

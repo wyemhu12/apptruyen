@@ -15,6 +15,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 - **Harness Engineering: Android Lint** — Cấu hình Android Lint block trong `build.gradle.kts` với HTML report output
 - **Harness Engineering: Pre-commit hook** — Git pre-commit hook chạy ktlint check tự động trước mỗi commit
 - **Harness Engineering: .gitignore** — File .gitignore toàn diện cho Android/Gradle/IDE/project-specific files
+- **Harness Engineering: Timber logging** — Tích hợp Timber v5.0.1 cho structured logging. Migrate tất cả `android.util.Log` calls sang Timber (trừ CrashHandler do init order). DebugTree chỉ planted trong debug builds.
+- **Harness Engineering: GitHub Actions CI** — Pipeline tự động: ktlint check → Android Lint → Unit Tests → Build Debug. Upload reports as artifacts.
 
 ### Sửa đổi
 

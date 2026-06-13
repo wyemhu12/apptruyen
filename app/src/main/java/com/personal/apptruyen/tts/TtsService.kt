@@ -27,6 +27,7 @@ import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import timber.log.Timber
 import java.util.Locale
 
 /**
@@ -302,7 +303,7 @@ class TtsService : Service() {
         try {
             startForeground(NOTIFICATION_ID, buildNotification())
         } catch (e: Exception) {
-            android.util.Log.w("TtsService", "startForeground failed, playing without foreground", e)
+            Timber.w(e, "startForeground failed, playing without foreground")
         }
         speakCurrent()
     }
@@ -405,7 +406,7 @@ class TtsService : Service() {
                 _state.value = _state.value.copy(currentVoiceName = voiceName)
             }
         } catch (e: Exception) {
-            android.util.Log.w("TtsService", "Failed to set voice: $voiceName", e)
+            Timber.w(e, "Failed to set voice: $voiceName")
         }
     }
 
@@ -433,7 +434,7 @@ class TtsService : Service() {
             try {
                 startForeground(NOTIFICATION_ID, buildNotification())
             } catch (e: Exception) {
-                android.util.Log.w("TtsService", "startForeground failed", e)
+                Timber.w(e, "startForeground failed")
             }
             speakCurrent()
         }
@@ -470,7 +471,7 @@ class TtsService : Service() {
                     start()
                 }
         } catch (e: Exception) {
-            android.util.Log.w("TtsService", "Silent player failed", e)
+            Timber.w(e, "Silent player failed")
         }
     }
 

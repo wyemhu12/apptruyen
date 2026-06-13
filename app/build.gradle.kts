@@ -158,6 +158,9 @@ dependencies {
     // Media (for MediaSession + notification controls)
     implementation("androidx.media:media:1.7.1")
 
+    // Structured Logging (harness engineering — observability)
+    implementation("com.jakewharton.timber:timber:5.0.1")
+
     // Testing
     testImplementation("org.junit.jupiter:junit-jupiter:5.11.4")
     testRuntimeOnly("org.junit.platform:junit-platform-launcher:1.11.4")

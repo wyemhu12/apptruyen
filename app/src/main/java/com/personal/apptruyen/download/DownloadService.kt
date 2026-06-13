@@ -9,7 +9,6 @@ import android.content.Context
 import android.content.Intent
 import android.os.IBinder
 import android.os.PowerManager
-import android.util.Log
 import androidx.core.app.NotificationCompat
 import com.personal.apptruyen.MainActivity
 import com.personal.apptruyen.R
@@ -21,6 +20,7 @@ import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import timber.log.Timber
 import javax.inject.Inject
 
 /**
@@ -161,7 +161,7 @@ class DownloadService : Service() {
         try {
             startForeground(NOTIFICATION_ID, buildProgressNotification(storyTitle, 0, chapterNumbers.size, 0))
         } catch (e: Exception) {
-            Log.w("DownloadService", "startForeground failed", e)
+            Timber.w(e, "startForeground failed")
         }
 
         downloadJob =
@@ -210,7 +210,7 @@ class DownloadService : Service() {
                     // User hủy — đã xử lý trong cancelCurrentDownload
                     throw e
                 } catch (e: Exception) {
-                    Log.e("DownloadService", "Download failed", e)
+                    Timber.e(e, "Download failed")
                     _downloadState.value = DownloadState.Completed(storyId, storyTitle, 0, 1)
                     sendCompletionNotification(storyTitle, 0, 1)
                 } finally {
