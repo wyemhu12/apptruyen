@@ -1,0 +1,61 @@
+# Built application files
+*.apk
+*.ap_
+*.aab
+
+# Files for the ART/Dalvik VM
+*.dex
+
+# Java class files
+*.class
+
+# Generated files
+bin/
+gen/
+out/
+
+# Gradle files
+.gradle/
+build/
+app/build/
+
+# Local configuration
+local.properties
+keystore.properties
+*.jks
+*.keystore
+
+# Android Studio / IntelliJ
+*.iml
+.idea/
+.DS_Store
+captures/
+.externalNativeBuild/
+.cxx/
+
+# Kotlin
+.kotlin/
+
+# Room schema exports (generated)
+/app/schemas/
+
+# Build output logs
+build_output.txt
+gradle_debug.txt
+
+# Test output
+build/test-output.txt
+
+# Crash logs (local debug only)
+crash.log
+
+# Node (if used for tooling)
+node_modules/
+package-lock.json
+
+# Screenshots (dev only)
+*.png
+!app/src/main/res/**/*.png
+
+# Temp files
+test.kt

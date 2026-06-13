@@ -1,0 +1,30 @@
+# EditorConfig — ktlint rules + editor formatting
+# https://editorconfig.org
+
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+indent_size = 4
+indent_style = space
+insert_final_newline = true
+max_line_length = 150
+trim_trailing_whitespace = true
+
+[*.{kt,kts}]
+# ktlint standard rules
+ktlint_standard_no-wildcard-imports = disabled
+ktlint_standard_package-name = disabled
+ktlint_standard_function-naming = disabled
+ktlint_standard_no-empty-first-line-in-class-body = disabled
+# Tạm disable: inline comments trong data class parameters
+ktlint_standard_comment-wrapping = disabled
+ktlint_standard_kdoc-wrapping = disabled
+
+[*.md]
+trim_trailing_whitespace = false
+max_line_length = off
+
+[*.{xml,json}]
+indent_size = 4
