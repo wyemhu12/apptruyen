@@ -43,21 +43,23 @@ fun SplashScreen(onSplashFinished: () -> Unit) {
 
     val textAlpha by animateFloatAsState(
         targetValue = if (startAnimation) 1f else 0f,
-        animationSpec = tween(
-            durationMillis = 600,
-            delayMillis = 400,
-            easing = FastOutSlowInEasing,
-        ),
+        animationSpec =
+            tween(
+                durationMillis = 600,
+                delayMillis = 400,
+                easing = FastOutSlowInEasing,
+            ),
         label = "textAlpha",
     )
 
     val subtitleAlpha by animateFloatAsState(
         targetValue = if (startAnimation) 1f else 0f,
-        animationSpec = tween(
-            durationMillis = 600,
-            delayMillis = 700,
-            easing = FastOutSlowInEasing,
-        ),
+        animationSpec =
+            tween(
+                durationMillis = 600,
+                delayMillis = 700,
+                easing = FastOutSlowInEasing,
+            ),
         label = "subtitleAlpha",
     )
 
@@ -75,9 +77,10 @@ fun SplashScreen(onSplashFinished: () -> Unit) {
         Image(
             painter = painterResource(id = R.drawable.splash_bg),
             contentDescription = "App Truyện",
-            modifier = Modifier
-                .fillMaxSize()
-                .alpha(bgAlpha),
+            modifier =
+                Modifier
+                    .fillMaxSize()
+                    .alpha(bgAlpha),
             contentScale = ContentScale.Crop,
         )
 
@@ -85,9 +88,10 @@ fun SplashScreen(onSplashFinished: () -> Unit) {
         Column(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Bottom,
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(bottom = 120.dp),
+            modifier =
+                Modifier
+                    .fillMaxSize()
+                    .padding(bottom = 120.dp),
         ) {
             // App name
             Text(
@@ -115,10 +119,11 @@ fun SplashScreen(onSplashFinished: () -> Unit) {
             text = "v${BuildConfig.VERSION_NAME}",
             fontSize = 12.sp,
             color = Color.White.copy(alpha = 0.35f),
-            modifier = Modifier
-                .align(Alignment.BottomCenter)
-                .padding(bottom = 32.dp)
-                .alpha(subtitleAlpha),
+            modifier =
+                Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(bottom = 32.dp)
+                    .alpha(subtitleAlpha),
         )
     }
 }

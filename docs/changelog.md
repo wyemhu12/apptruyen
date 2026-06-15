@@ -6,6 +6,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 
 ## [Unreleased]
 
+## [v2.8.4] - 2026-06-15
+
 ### Thêm mới
 
 - **Harness Engineering: Git version control** — Khởi tạo git repository cho project, cải thiện khả năng tracking history và rollback
