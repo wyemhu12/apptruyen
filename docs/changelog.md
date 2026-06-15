@@ -20,6 +20,24 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 
 ### Sửa đổi
 
+- **Thiết kế UI: Cập nhật App Icon (lần 3)** — Thay thế icon bằng bản mới từ folder `android/`:
+  - Foreground: Book icon lớn hơn, căn giữa đẹp hơn (thay vì nhỏ + lệch góc)
+  - Background: Nền tối có hiệu ứng sóng + sao lấp lánh (thay vì flat tối đơn giản)
+  - Monochrome: Cập nhật tương ứng với foreground mới
+  - Cập nhật tất cả 5 density: mdpi, hdpi, xhdpi, xxhdpi, xxxhdpi + anydpi-v26
+
+- **Thiết kế UI: Icon và Splash Screen (lần 2)** — Thay thế toàn bộ icon và splash screen bằng logo + hình nền mới do user cung cấp:
+  - Xóa tất cả icon cũ (`ic_launcher`, `ic_launcher_foreground`, `ic_launcher_background`, `ic_launcher_monochrome`) ở mọi density
+  - Xóa tất cả splash assets cũ (`splash_bg.png`, `ic_splash_logo.png`) ở mọi drawable density
+  - Tạo mới app icon từ logo (neon book gradient tím-cyan) trên nền tối #0A0E17 cho 5 density: mdpi→xxxhdpi
+  - Tạo mới adaptive icon (foreground transparent + background tối + monochrome trắng) cho 5 density
+  - Tạo mới splash screen kết hợp logo centered trên background sóng vũ trụ cho drawable, drawable-xhdpi, drawable-xxxhdpi
+
+- **Thiết kế UI: Icon và Splash Screen** — Làm mới giao diện khởi động theo phong cách cao cấp (premium dark mode):
+  - Cập nhật icon ứng dụng (`ic_launcher`) thành biểu tượng cuốn sách/chữ T trừu tượng với dải màu gradient tím neon/cyan.
+  - Thiết kế lại `SplashScreen.kt` với nền tối (obsidian), logo vector glowing gradient, và text màu xám xanh.
+  - Thay đổi hệ màu shadow và glow effect để khớp với thiết kế hiện đại.
+
 - **project-rules.md** — Thêm ktlint commands vào danh sách Gradle commands chuẩn, thêm lint rule vào quy tắc code
 - **ScraperCircuitBreaker.kt** — Chuyển KDoc thành EOL comments trong constructor params để tránh xung đột ktlint rules
 - **StoryEntity.kt** — Chuyển KDoc thành EOL comments trong data class params

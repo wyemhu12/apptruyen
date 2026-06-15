@@ -1,20 +1,28 @@
 package com.personal.apptruyen.ui.splash
 
-import androidx.compose.animation.core.*
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Image
-import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Text
-import androidx.compose.runtime.*
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.scale
-import androidx.compose.ui.draw.shadow
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -25,62 +33,32 @@ import kotlinx.coroutines.delay
 
 @Composable
 fun SplashScreen(onSplashFinished: () -> Unit) {
-    // Animation states
     var startAnimation by remember { mutableStateOf(false) }
 
-    val iconScale by animateFloatAsState(
-        targetValue = if (startAnimation) 1f else 0.3f,
-        animationSpec =
-            tween(
-                durationMillis = 800,
-                easing = FastOutSlowInEasing,
-            ),
-        label = "iconScale",
-    )
-
-    val iconAlpha by animateFloatAsState(
+    val bgAlpha by animateFloatAsState(
         targetValue = if (startAnimation) 1f else 0f,
-        animationSpec =
-            tween(
-                durationMillis = 600,
-                easing = FastOutSlowInEasing,
-            ),
-        label = "iconAlpha",
+        animationSpec = tween(durationMillis = 800, easing = FastOutSlowInEasing),
+        label = "bgAlpha",
     )
 
     val textAlpha by animateFloatAsState(
         targetValue = if (startAnimation) 1f else 0f,
-        animationSpec =
-            tween(
-                durationMillis = 600,
-                delayMillis = 400,
-                easing = FastOutSlowInEasing,
-            ),
+        animationSpec = tween(
+            durationMillis = 600,
+            delayMillis = 400,
+            easing = FastOutSlowInEasing,
+        ),
         label = "textAlpha",
     )
 
     val subtitleAlpha by animateFloatAsState(
         targetValue = if (startAnimation) 1f else 0f,
-        animationSpec =
-            tween(
-                durationMillis = 600,
-                delayMillis = 700,
-                easing = FastOutSlowInEasing,
-            ),
+        animationSpec = tween(
+            durationMillis = 600,
+            delayMillis = 700,
+            easing = FastOutSlowInEasing,
+        ),
         label = "subtitleAlpha",
-    )
-
-    // Pulsing glow effect for icon
-    val infiniteTransition = rememberInfiniteTransition(label = "pulse")
-    val pulseScale by infiniteTransition.animateFloat(
-        initialValue = 1f,
-        targetValue = 1.05f,
-        animationSpec =
-            infiniteRepeatable(
-                animation = tween(1500, easing = FastOutSlowInEasing),
-                repeatMode = RepeatMode.Reverse,
-            ),
-        label = "pulseScale",
     )
 
     LaunchedEffect(Unit) {
@@ -89,76 +67,32 @@ fun SplashScreen(onSplashFinished: () -> Unit) {
         onSplashFinished()
     }
 
-    // Elegant dark background with warm accent
     Box(
-        modifier =
-            Modifier
-                .fillMaxSize()
-                .background(
-                    Brush.verticalGradient(
-                        colors =
-                            listOf(
-                                Color(0xFF0B0F16), // Deep charcoal
-                                Color(0xFF141B2D), // Dark blue-grey
-                            ),
-                    ),
-                ),
+        modifier = Modifier.fillMaxSize(),
         contentAlignment = Alignment.Center,
     ) {
-        // Soft warm glow behind icon — large radius for smooth fade
-        Box(
-            modifier =
-                Modifier
-                    .size(360.dp)
-                    .alpha(iconAlpha * 0.18f)
-                    .scale(iconScale * pulseScale)
-                    .background(
-                        Brush.radialGradient(
-                            colorStops =
-                                arrayOf(
-                                    0.0f to Color(0xFFC17900),
-                                    0.25f to Color(0xFFC17900).copy(alpha = 0.6f),
-                                    0.5f to Color(0xFFC17900).copy(alpha = 0.2f),
-                                    0.75f to Color(0xFFC17900).copy(alpha = 0.05f),
-                                    1.0f to Color.Transparent,
-                                ),
-                        ),
-                    ),
+        // Full-screen splash image (background + logo + glow — all in one)
+        Image(
+            painter = painterResource(id = R.drawable.splash_bg),
+            contentDescription = "App Truyện",
+            modifier = Modifier
+                .fillMaxSize()
+                .alpha(bgAlpha),
+            contentScale = ContentScale.Crop,
         )
 
+        // Text overlay at bottom area
         Column(
             horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.Center,
+            verticalArrangement = Arrangement.Bottom,
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(bottom = 120.dp),
         ) {
-            // App icon with rounded corners and shadow
-            Box(
-                modifier =
-                    Modifier
-                        .size(120.dp)
-                        .scale(iconScale * pulseScale)
-                        .alpha(iconAlpha)
-                        .shadow(
-                            elevation = 16.dp,
-                            shape = RoundedCornerShape(24.dp),
-                            ambientColor = Color(0xFFC17900).copy(alpha = 0.4f),
-                            spotColor = Color(0xFFC17900).copy(alpha = 0.3f),
-                        ).clip(RoundedCornerShape(24.dp))
-                        .background(Color(0xFFC17900)),
-                contentAlignment = Alignment.Center,
-            ) {
-                Image(
-                    painter = painterResource(id = R.drawable.ic_splash_logo),
-                    contentDescription = "App Truyện",
-                    modifier = Modifier.size(96.dp),
-                )
-            }
-
-            Spacer(modifier = Modifier.height(24.dp))
-
             // App name
             Text(
                 text = "App Truyện",
-                fontSize = 30.sp,
+                fontSize = 32.sp,
                 fontWeight = FontWeight.Bold,
                 color = Color.White,
                 modifier = Modifier.alpha(textAlpha),
@@ -169,23 +103,22 @@ fun SplashScreen(onSplashFinished: () -> Unit) {
             // Subtitle
             Text(
                 text = "Đọc & Nghe truyện mọi lúc",
-                fontSize = 16.sp,
-                fontWeight = FontWeight.Medium,
-                color = Color(0xFFE0C0A0),
+                fontSize = 15.sp,
+                fontWeight = FontWeight.Normal,
+                color = Color(0xFF7A8FA0),
                 modifier = Modifier.alpha(subtitleAlpha),
             )
         }
 
-        // Version at bottom — dynamic from BuildConfig
+        // Version at bottom
         Text(
             text = "v${BuildConfig.VERSION_NAME}",
             fontSize = 12.sp,
-            color = Color.White.copy(alpha = 0.45f),
-            modifier =
-                Modifier
-                    .align(Alignment.BottomCenter)
-                    .padding(bottom = 32.dp)
-                    .alpha(subtitleAlpha),
+            color = Color.White.copy(alpha = 0.35f),
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .padding(bottom = 32.dp)
+                .alpha(subtitleAlpha),
         )
     }
 }
