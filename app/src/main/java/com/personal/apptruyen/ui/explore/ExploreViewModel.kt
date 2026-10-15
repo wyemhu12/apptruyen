@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.personal.apptruyen.data.model.Genre
 import com.personal.apptruyen.data.model.Story
+import com.personal.apptruyen.data.repository.ISourceAuthRepository
 import com.personal.apptruyen.data.repository.IStoryRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.collections.immutable.ImmutableList
@@ -11,8 +12,10 @@ import kotlinx.collections.immutable.persistentListOf
 import kotlinx.collections.immutable.toImmutableList
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import javax.inject.Inject
@@ -22,6 +25,7 @@ class ExploreViewModel
     @Inject
     constructor(
         private val repository: IStoryRepository,
+        private val authRepository: ISourceAuthRepository,
     ) : ViewModel() {
 
         data class ExploreState(
@@ -40,6 +44,14 @@ class ExploreViewModel
         val state: StateFlow<ExploreState> = _state.asStateFlow()
         private var loadJob: Job? = null
         private var loadMoreJob: Job? = null
+
+        val loginRequiredSources: StateFlow<Set<String>> =
+            authRepository.loginRequiredSources
+                .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptySet())
+
+        fun dismissLoginPrompt(sourceId: String) {
+            authRepository.clearLoginRequired(sourceId)
+        }
 
         init {
             loadGenres()

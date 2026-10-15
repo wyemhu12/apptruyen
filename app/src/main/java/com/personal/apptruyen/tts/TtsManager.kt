@@ -12,6 +12,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import timber.log.Timber
 import java.io.Closeable
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -55,7 +56,11 @@ class TtsManager
                     name: ComponentName?,
                     binder: IBinder?,
                 ) {
-                    val ttsBinder = binder as TtsService.TtsBinder
+                    val ttsBinder =
+                        binder as? TtsService.TtsBinder ?: run {
+                            Timber.w("Received non-TtsBinder onServiceConnected: %s", binder)
+                            return
+                        }
                     service = ttsBinder.getService()
                     isBound = true
 
@@ -227,7 +232,7 @@ class TtsManager
             val SPEED_OPTIONS = TtsService.SPEED_OPTIONS
 
             // Cached regex — splitIntoParagraphs called frequently
-            private val PARAGRAPH_SPLIT_REGEX = Regex("\n\\s*\n|\n")
+            private val PARAGRAPH_SPLIT_REGEX = Regex("\n\\s*\n")
             private val SENTENCE_SPLIT_REGEX = Regex("(?<=[.!?。！？])\\s+")
 
             fun splitIntoParagraphs(

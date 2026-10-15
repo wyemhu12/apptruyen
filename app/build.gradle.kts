@@ -4,6 +4,7 @@ plugins {
     id("com.google.dagger.hilt.android")
     id("com.google.devtools.ksp")
     id("org.jetbrains.kotlin.plugin.serialization")
+    id("androidx.room3")
     id("org.jlleitschuh.gradle.ktlint")
 }
 
@@ -24,8 +25,8 @@ android {
         applicationId = "com.personal.apptruyen"
         minSdk = 26
         targetSdk = 36
-        versionCode = 43
-        versionName = "2.8.4"
+        versionCode = 49
+        versionName = "3.0.1"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
@@ -82,6 +83,11 @@ android {
         htmlReport = true
         htmlOutput = layout.buildDirectory.file("reports/lint/lint-report.html").get().asFile
     }
+    sourceSets {
+        getByName("androidTest") {
+            assets.srcDirs(files("$projectDir/schemas"))
+        }
+    }
 }
 
 androidComponents {
@@ -91,8 +97,8 @@ androidComponents {
     }
 }
 
-ksp {
-    arg("room.schemaLocation", "$projectDir/schemas")
+room3 {
+    schemaDirectory("$projectDir/schemas")
 }
 
 dependencies {
@@ -124,14 +130,14 @@ dependencies {
     implementation("io.coil-kt.coil3:coil-network-okhttp:3.4.0")
 
     // Hilt
-    implementation("com.google.dagger:hilt-android:2.59.2")
-    ksp("com.google.dagger:hilt-compiler:2.59.2")
+    implementation("com.google.dagger:hilt-android:2.60.1")
+    ksp("com.google.dagger:hilt-compiler:2.60.1")
     implementation("androidx.hilt:hilt-navigation-compose:1.3.0")
 
-    // Room
-    implementation("androidx.room:room-runtime:2.8.4")
-    implementation("androidx.room:room-ktx:2.8.4")
-    ksp("androidx.room:room-compiler:2.8.4")
+    // Room 3
+    implementation("androidx.room3:room3-runtime:3.0.3")
+    ksp("androidx.room3:room3-compiler:3.0.3")
+    implementation("androidx.sqlite:sqlite-bundled:2.7.1")
 
     // Network + Scraping
     implementation("com.squareup.okhttp3:okhttp:5.3.2")
@@ -150,13 +156,13 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-collections-immutable:0.3.8")
 
     // JSON serialization (backup/restore)
-    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.8.1")
+    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.11.0")
 
     // Baseline Profiles
     implementation("androidx.profileinstaller:profileinstaller:1.4.1")
 
-    // Media (for MediaSession + notification controls)
-    implementation("androidx.media:media:1.7.1")
+    // Media3 (for MediaSessionService + notification controls)
+    implementation("androidx.media3:media3-session:1.11.1")
 
     // Structured Logging (harness engineering — observability)
     implementation("com.jakewharton.timber:timber:5.0.1")
@@ -171,6 +177,7 @@ dependencies {
     androidTestImplementation("androidx.test.ext:junit:1.3.0")
     androidTestImplementation("androidx.test.espresso:espresso-core:3.7.0")
     androidTestImplementation("androidx.compose.ui:ui-test-junit4")
+    androidTestImplementation("androidx.room3:room3-testing:3.0.3")
     debugImplementation("androidx.compose.ui:ui-tooling")
     debugImplementation("androidx.compose.ui:ui-test-manifest")
 

@@ -41,6 +41,13 @@ sealed class ScraperException(
         val retryAfterMs: Long = 0,
     ) : ScraperException("Nguồn $sourceId tạm thời không khả dụng. Thử lại sau.")
 
+    /** Nguồn yêu cầu đăng nhập tài khoản để xem nội dung */
+    class LoginRequiredException(
+        val sourceId: String,
+        message: String = "Nguồn truyện yêu cầu đăng nhập tài khoản để xem nội dung.",
+        cause: Throwable? = null,
+    ) : ScraperException(message, cause)
+
     /** Lỗi không xác định */
     class UnknownException(
         message: String = "Đã xảy ra lỗi không xác định.",

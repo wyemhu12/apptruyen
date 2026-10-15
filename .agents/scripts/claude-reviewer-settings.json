@@ -1,0 +1,45 @@
+{
+  "permissions": {
+    "allow": [
+      "Read",
+      "Grep",
+      "Glob",
+      "WebSearch",
+      "WebFetch(domain:truyencom.com)",
+      "WebFetch(domain:truyenfull.today)",
+      "WebFetch(domain:sstruyen.net)",
+      "WebFetch(domain:tangthuvien.org)",
+      "WebFetch(domain:lacatruyen.buzz)",
+      "WebFetch(domain:www.lacatruyen.buzz)",
+      "WebFetch(domain:lacatruyen.world)",
+      "WebFetch(domain:www.lacatruyen.world)",
+      "WebFetch(domain:developer.android.com)",
+      "WebFetch(domain:kotlinlang.org)",
+      "WebFetch(domain:square.github.io)",
+      "WebFetch(domain:jsoup.org)",
+      "WebFetch(domain:code.claude.com)",
+      "WebFetch(domain:git-scm.com)",
+      "WebFetch(domain:nodejs.org)",
+      "WebFetch(domain:learn.microsoft.com)",
+      "WebFetch(domain:curl.se)"
+    ],
+    "deny": [
+      "Bash",
+      "PowerShell",
+      "Edit(.agents/**)",
+      "Edit(app/**)",
+      "Read(**/local.properties)",
+      "Read(**/keystore*)",
+      "Read(**/*.jks)",
+      "Read(**/*.key)",
+      "Read(**/*.pem)",
+      "Read(**/.env*)",
+      "Read(~/.ssh/**)",
+      "Read(~/.android/**)",
+      "Read(~/.config/**)",
+      "Read(~/.claude.json)",
+      "Read(~/.claude/**)"
+    ],
+    "blockReadsOutsideWorkingDirectories": true
+  }
+}

@@ -19,6 +19,7 @@ class SearchViewModelTest {
 
     private lateinit var repository: IStoryRepository
     private lateinit var searchHistoryRepository: SearchHistoryRepository
+    private lateinit var authRepository: com.personal.apptruyen.data.repository.ISourceAuthRepository
     private lateinit var viewModel: SearchViewModel
     private val dispatcher = UnconfinedTestDispatcher()
 
@@ -38,6 +39,8 @@ class SearchViewModelTest {
         Dispatchers.setMain(dispatcher)
         repository = mockk(relaxed = true)
         searchHistoryRepository = mockk(relaxed = true)
+        authRepository = mockk(relaxed = true)
+        every { authRepository.loginRequiredSources } returns kotlinx.coroutines.flow.MutableStateFlow(emptySet())
 
         coEvery { repository.getGenreList() } returns
             listOf(
@@ -57,7 +60,7 @@ class SearchViewModelTest {
             coEvery { repository.searchStories(any(), any()) } returns listOf(sampleStory)
             coEvery { searchHistoryRepository.saveSearch(any()) } just Runs
 
-            viewModel = SearchViewModel(repository, searchHistoryRepository)
+            viewModel = SearchViewModel(repository, searchHistoryRepository, authRepository)
             advanceUntilIdle()
 
             viewModel.onQueryChange("test")
@@ -77,7 +80,7 @@ class SearchViewModelTest {
         runTest {
             coEvery { repository.searchStories("xyz", any()) } returns emptyList()
 
-            viewModel = SearchViewModel(repository, searchHistoryRepository)
+            viewModel = SearchViewModel(repository, searchHistoryRepository, authRepository)
             advanceUntilIdle()
 
             viewModel.onQueryChange("xyz")
@@ -92,7 +95,7 @@ class SearchViewModelTest {
     @Test
     fun `blank query does not trigger search`() =
         runTest {
-            viewModel = SearchViewModel(repository, searchHistoryRepository)
+            viewModel = SearchViewModel(repository, searchHistoryRepository, authRepository)
             advanceUntilIdle()
 
             viewModel.onQueryChange("   ")
@@ -108,7 +111,7 @@ class SearchViewModelTest {
         runTest {
             coEvery { searchHistoryRepository.deleteSearch(any()) } just Runs
 
-            viewModel = SearchViewModel(repository, searchHistoryRepository)
+            viewModel = SearchViewModel(repository, searchHistoryRepository, authRepository)
             advanceUntilIdle()
 
             viewModel.deleteHistoryItem("old query")
@@ -122,7 +125,7 @@ class SearchViewModelTest {
         runTest {
             coEvery { searchHistoryRepository.clearSearchHistory() } just Runs
 
-            viewModel = SearchViewModel(repository, searchHistoryRepository)
+            viewModel = SearchViewModel(repository, searchHistoryRepository, authRepository)
             advanceUntilIdle()
 
             viewModel.clearHistory()
@@ -134,7 +137,7 @@ class SearchViewModelTest {
     @Test
     fun `genres are loaded on init`() =
         runTest {
-            viewModel = SearchViewModel(repository, searchHistoryRepository)
+            viewModel = SearchViewModel(repository, searchHistoryRepository, authRepository)
             advanceUntilIdle()
 
             val genres = viewModel.genres.value
@@ -145,7 +148,7 @@ class SearchViewModelTest {
     @Test
     fun `clearFilter resets state`() =
         runTest {
-            viewModel = SearchViewModel(repository, searchHistoryRepository)
+            viewModel = SearchViewModel(repository, searchHistoryRepository, authRepository)
             advanceUntilIdle()
 
             viewModel.onQueryChange("test")
@@ -153,5 +156,13 @@ class SearchViewModelTest {
 
             assertEquals("", viewModel.state.value.query)
             assertFalse(viewModel.state.value.isFilterActive)
+        }
+
+    @Test
+    fun `dismissLoginPrompt delegates to authRepository`() =
+        runTest {
+            viewModel = SearchViewModel(repository, searchHistoryRepository, authRepository)
+            viewModel.dismissLoginPrompt("wikidich")
+            verify { authRepository.clearLoginRequired("wikidich") }
         }
 }

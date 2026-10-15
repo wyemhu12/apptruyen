@@ -33,11 +33,13 @@ internal fun ReaderSettingsPanel(
     // Auto-scroll
     autoScrollEnabled: Boolean,
     autoScrollSpeed: Int,
+    pokemonLookupEnabled: Boolean = true,
     onFontSizeChange: (Float) -> Unit,
     onThemeChange: (ReaderViewModel.ReaderTheme) -> Unit,
     onToggleCopyMode: () -> Unit,
     onToggleTextReplacement: () -> Unit,
     onToggleAutoFormat: () -> Unit,
+    onTogglePokemonLookup: () -> Unit = {},
     onLineSpacingChange: (Float) -> Unit,
     onBrightnessChange: (Float) -> Unit,
     onFontFamilyChange: (ReaderViewModel.ReaderFontFamily) -> Unit,
@@ -397,6 +399,26 @@ internal fun ReaderSettingsPanel(
                 Switch(
                     checked = copyMode,
                     onCheckedChange = { onToggleCopyMode() },
+                )
+            }
+
+            // Pokemon lookup toggle
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("Từ điển Pokémon", style = MaterialTheme.typography.labelLarge)
+                    Text(
+                        "Gạch chân tên Pokémon trong truyện, chạm để xem ảnh và hệ",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                Switch(
+                    checked = pokemonLookupEnabled,
+                    onCheckedChange = { onTogglePokemonLookup() },
                 )
             }
 

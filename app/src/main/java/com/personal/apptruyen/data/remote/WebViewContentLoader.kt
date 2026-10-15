@@ -32,10 +32,10 @@ class WebViewContentLoader
             // Allowed domains for WebView content loading
             private val ALLOWED_DOMAINS =
                 listOf(
-                    "truyencom.com",
                     "tangthuvien.vn",
                     "sstruyen.net",
-                    "truyenfull.today",
+                    "wikicv.org",
+                    "wikicv.net",
                 )
 
             // JS to extract chapter content after page loads

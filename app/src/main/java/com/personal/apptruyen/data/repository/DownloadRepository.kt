@@ -1,14 +1,20 @@
 package com.personal.apptruyen.data.repository
 
 import android.util.Log
-import androidx.room.withTransaction
-import com.personal.apptruyen.data.local.AppDatabase
 import com.personal.apptruyen.data.local.ChapterDao
+import com.personal.apptruyen.data.local.DatabaseTransactionRunner
 import com.personal.apptruyen.data.local.ReadingProgressDao
 import com.personal.apptruyen.data.local.StoryDao
 import com.personal.apptruyen.data.model.Chapter
+import com.personal.apptruyen.data.model.ChapterContentResult
 import com.personal.apptruyen.data.model.Story
+import com.personal.apptruyen.data.remote.ScraperException
 import com.personal.apptruyen.data.remote.StorySource
+import com.personal.apptruyen.data.remote.matchesUrl
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
@@ -30,26 +36,49 @@ class DownloadRepository
         private val storyDao: StoryDao,
         private val chapterDao: ChapterDao,
         private val progressDao: ReadingProgressDao,
-        private val database: AppDatabase,
+        private val transactionRunner: DatabaseTransactionRunner,
     ) : IDownloadRepository {
 
+        private data class ChapterFetchOutcome(
+            val chapter: Chapter,
+            val result: ChapterContentResult? = null,
+            val error: Exception? = null,
+        )
+
+        companion object {
+            const val DOWNLOAD_BATCH_SIZE = 4
+            const val MAX_RETRY_ATTEMPTS = 2
+            const val BASE_BATCH_DELAY_MS = 250L
+            const val MAX_BATCH_DELAY_MS = 3000L
+            const val MAX_CONSECUTIVE_FAILED_BATCHES = 3
+            const val SQLITE_MAX_BIND_ARGS = 900
+            private val DUMMY_TITLE_REGEX = Regex("^Chương \\d+$")
+        }
+
         private fun sourceFor(url: String): StorySource =
-            sources.firstOrNull { url.contains(it.baseUrl.substringAfter("://")) }
-                ?: sources.first()
+            sources.firstOrNull { it.matchesUrl(url) }
+                ?: throw ScraperException.ParseException("Nguồn truyện không được hỗ trợ", url)
 
         override suspend fun getChaptersByNumbers(
             storyId: String,
             chapterNumbers: List<Int>,
-        ): List<Chapter> =
-            chapterDao.getChaptersByNumbers(storyId, chapterNumbers).map { entity ->
-                Chapter(
-                    storyId = entity.storyId,
-                    chapterNumber = entity.chapterNumber,
-                    title = entity.title,
-                    url = entity.url,
-                    isDownloaded = entity.isDownloaded,
-                )
-            }
+        ): List<Chapter> {
+            if (chapterNumbers.isEmpty()) return emptyList()
+            return chapterNumbers
+                .distinct()
+                .chunked(SQLITE_MAX_BIND_ARGS)
+                .flatMap { chunk -> chapterDao.getChaptersByNumbers(storyId, chunk) }
+                .sortedBy { it.chapterNumber }
+                .map { entity ->
+                    Chapter(
+                        storyId = entity.storyId,
+                        chapterNumber = entity.chapterNumber,
+                        title = entity.title,
+                        url = entity.url,
+                        isDownloaded = entity.isDownloaded,
+                    )
+                }
+        }
 
         override suspend fun snapshotStoryMetadata(storyId: String) {
             val existing = storyDao.getStoryById(storyId) ?: return
@@ -81,50 +110,140 @@ class DownloadRepository
             }
         }
 
+        private suspend fun fetchChapterWithRetry(
+            source: StorySource,
+            chapter: Chapter,
+            retryDelayMs: Long,
+        ): ChapterFetchOutcome {
+            if (chapter.url.isBlank()) {
+                return ChapterFetchOutcome(
+                    chapter = chapter,
+                    error = ScraperException.ParseException("URL chương rỗng", ""),
+                )
+            }
+            var lastError: Exception? = null
+            for (attempt in 1..MAX_RETRY_ATTEMPTS) {
+                currentCoroutineContext().ensureActive()
+                try {
+                    val result = source.getChapterContentWithTitle(chapter.url)
+                    return ChapterFetchOutcome(chapter = chapter, result = result)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: ScraperException.LoginRequiredException) {
+                    return ChapterFetchOutcome(chapter = chapter, error = e)
+                } catch (e: ScraperException.CircuitOpenException) {
+                    return ChapterFetchOutcome(chapter = chapter, error = e)
+                } catch (e: Exception) {
+                    lastError = e
+                    if (attempt < MAX_RETRY_ATTEMPTS) {
+                        delay(retryDelayMs)
+                    }
+                }
+            }
+            return ChapterFetchOutcome(chapter = chapter, error = lastError)
+        }
+
         override fun downloadChapters(
             storyId: String,
             chapters: List<Chapter>,
         ): Flow<DownloadProgress> =
             flow {
+                if (chapters.isEmpty()) return@flow
+
                 var downloaded = 0
                 var errors = 0
-                var currentDelay = 500L
-                val maxDelay = 3000L
-                val baseDelay = 500L
+                var currentDelay = BASE_BATCH_DELAY_MS
+                var consecutiveFailedBatches = 0
 
-                val source = if (chapters.isNotEmpty()) sourceFor(chapters.first().url) else sources.first()
+                val sortedChapters = chapters.sortedBy { it.chapterNumber }
+                val firstValidUrl = sortedChapters.firstOrNull { it.url.isNotBlank() }?.url ?: ""
+                val source = sourceFor(firstValidUrl)
+                val batches = sortedChapters.chunked(DOWNLOAD_BATCH_SIZE)
 
-                for (chapter in chapters) {
+                for ((batchIndex, batch) in batches.withIndex()) {
                     currentCoroutineContext().ensureActive()
-                    emit(DownloadProgress(downloaded, chapters.size, chapter.title, errors))
+                    emit(DownloadProgress(downloaded, sortedChapters.size, batch.first().title, errors))
 
-                    var success = false
-                    for (attempt in 1..2) {
-                        try {
-                            val content = source.getChapterContent(chapter.url)
-                            chapterDao.saveChapterContent(storyId, chapter.chapterNumber, content)
-                            success = true
-                            break
-                        } catch (e: Exception) {
-                            if (attempt == 2) {
-                                errors++
-                                Log.e("DownloadRepo", "Download error for ${chapter.title}", e)
-                            } else {
-                                delay(currentDelay)
+                    val batchOutcomes =
+                        coroutineScope {
+                            batch
+                                .map { chapter ->
+                                    async {
+                                        fetchChapterWithRetry(source, chapter, currentDelay)
+                                    }
+                                }.awaitAll()
+                        }
+
+                    val orderedOutcomes = batchOutcomes.sortedBy { it.chapter.chapterNumber }
+                    var batchErrors = 0
+                    var fatalError: ScraperException? = null
+
+                    for (outcome in orderedOutcomes) {
+                        currentCoroutineContext().ensureActive()
+                        val chapter = outcome.chapter
+                        val result = outcome.result
+                        if (result != null) {
+                            chapterDao.saveChapterContent(storyId, chapter.chapterNumber, result.content)
+
+                            if (!result.title.isNullOrBlank()) {
+                                val isDummy = chapter.title.matches(DUMMY_TITLE_REGEX)
+                                if (isDummy || chapter.title.isBlank()) {
+                                    chapterDao.updateChapterMetadata(
+                                        storyId = storyId,
+                                        chapterNumber = chapter.chapterNumber,
+                                        title = result.title,
+                                        url = chapter.url,
+                                    )
+                                }
+                            }
+                        } else {
+                            errors++
+                            batchErrors++
+                            Log.e("DownloadRepo", "Download error for ${chapter.title}", outcome.error)
+                            if (
+                                fatalError == null &&
+                                (
+                                    outcome.error is ScraperException.LoginRequiredException ||
+                                        outcome.error is ScraperException.CircuitOpenException
+                                )
+                            ) {
+                                fatalError = outcome.error
                             }
                         }
+
+                        downloaded++
+                        emit(DownloadProgress(downloaded, sortedChapters.size, chapter.title, errors))
                     }
 
-                    downloaded++
-                    emit(DownloadProgress(downloaded, chapters.size, chapter.title, errors))
+                    if (fatalError != null) {
+                        throw fatalError
+                    }
+
+                    consecutiveFailedBatches =
+                        if (batchErrors == batch.size) {
+                            consecutiveFailedBatches + 1
+                        } else {
+                            0
+                        }
+
+                    if (consecutiveFailedBatches >= MAX_CONSECUTIVE_FAILED_BATCHES) {
+                        Log.w(
+                            "DownloadRepo",
+                            "Aborting download after $consecutiveFailedBatches consecutive failed batches for $storyId",
+                        )
+                        break
+                    }
 
                     currentDelay =
-                        if (success) {
-                            baseDelay
+                        if (batchErrors == 0) {
+                            BASE_BATCH_DELAY_MS
                         } else {
-                            (currentDelay * 2).coerceAtMost(maxDelay)
+                            (currentDelay * 2).coerceAtMost(MAX_BATCH_DELAY_MS)
                         }
-                    delay(currentDelay)
+
+                    if (batchIndex < batches.lastIndex) {
+                        delay(currentDelay)
+                    }
                 }
             }
 
@@ -179,7 +298,7 @@ class DownloadRepository
         }
 
         override suspend fun deleteStory(storyId: String) {
-            database.withTransaction {
+            transactionRunner.withWriteTransaction {
                 progressDao.deleteProgress(storyId)
                 chapterDao.deleteChaptersByStory(storyId)
                 storyDao.deleteStory(storyId)

@@ -9,7 +9,6 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.animateScrollBy
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -41,10 +40,12 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
+import com.personal.apptruyen.data.model.PokemonMatchRange
 import com.personal.apptruyen.tts.TtsManager
 import com.personal.apptruyen.tts.TtsService
 import com.personal.apptruyen.ui.theme.*
 import com.personal.apptruyen.ui.theme.rememberReaderThemeColors
+import kotlinx.collections.immutable.persistentListOf
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.isActive
@@ -258,6 +259,7 @@ fun ReaderScreen(
                 }
             },
             onSeekAndPlay = { viewModel.ttsSeekAndPlay(it) },
+            onPokemonClick = { match -> viewModel.onIntent(ReaderIntent.SelectPokemon(match)) },
             onPrevChapter = {
                 hapticTop.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                 viewModel.onIntent(ReaderIntent.PrevChapter)
@@ -374,6 +376,7 @@ fun ReaderScreen(
                 storyReplacements = state.storyReplacements,
                 autoScrollEnabled = state.autoScrollEnabled,
                 autoScrollSpeed = state.autoScrollSpeed,
+                pokemonLookupEnabled = state.pokemonLookupEnabled,
                 onBrightnessChange = { value ->
                     brightness = value
                     currentActivity?.let { activity ->
@@ -387,6 +390,7 @@ fun ReaderScreen(
                 onToggleCopyMode = { viewModel.onIntent(ReaderIntent.ToggleCopyMode) },
                 onToggleTextReplacement = { viewModel.onIntent(ReaderIntent.ToggleTextReplacement) },
                 onToggleAutoFormat = { viewModel.onIntent(ReaderIntent.ToggleAutoFormat) },
+                onTogglePokemonLookup = { viewModel.onIntent(ReaderIntent.TogglePokemonLookup) },
                 onLineSpacingChange = { viewModel.onIntent(ReaderIntent.SetLineSpacing(it)) },
                 onFontFamilyChange = { viewModel.onIntent(ReaderIntent.SetFontFamily(it)) },
                 onToggleStoryReplacements = { viewModel.onIntent(ReaderIntent.ToggleStoryReplacements) },
@@ -466,6 +470,14 @@ fun ReaderScreen(
             onChapterClick = { chapter -> viewModel.onIntent(ReaderIntent.NavigateToChapter(chapter)) },
             onDismiss = { viewModel.onIntent(ReaderIntent.ToggleChapterList) },
         )
+
+        // Pokemon Lookup Dialog overlay
+        state.selectedPokemon?.let { selection ->
+            PokemonLookupDialog(
+                selection = selection,
+                onDismiss = { viewModel.onIntent(ReaderIntent.DismissPokemonDialog) },
+            )
+        }
     }
 }
 
@@ -488,6 +500,7 @@ private fun ReaderContentArea(
     onRetry: () -> Unit,
     onToggleBars: () -> Unit,
     onSeekAndPlay: (Int) -> Unit,
+    onPokemonClick: (PokemonMatchRange) -> Unit,
     onPrevChapter: () -> Unit,
     onNextChapter: () -> Unit,
 ) {
@@ -635,18 +648,24 @@ private fun ReaderContentArea(
                             )
                         }
                     } else {
-                        Text(
-                            text = paragraph,
-                            style = textStyle,
-                            modifier =
-                                baseModifier
-                                    .combinedClickable(
-                                        onClick = onToggleBars,
-                                        onLongClick = {
-                                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                            onSeekAndPlay(index)
-                                        },
-                                    ).padding(vertical = 8.dp, horizontal = 6.dp),
+                        val paragraphMatches =
+                            if (state.pokemonLookupEnabled) {
+                                state.paragraphPokemonMatches[index] ?: persistentListOf()
+                            } else {
+                                persistentListOf()
+                            }
+                        ReaderParagraphItem(
+                            paragraph = paragraph,
+                            matches = paragraphMatches,
+                            textStyle = textStyle,
+                            readerTheme = state.readerTheme,
+                            modifier = baseModifier,
+                            onToggleBars = onToggleBars,
+                            onLongPressSeekAndPlay = {
+                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                onSeekAndPlay(index)
+                            },
+                            onPokemonClick = onPokemonClick,
                         )
                     }
                 }

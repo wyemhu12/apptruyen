@@ -15,6 +15,7 @@ import org.junit.jupiter.api.Test
 class ExploreViewModelTest {
 
     private lateinit var repository: IStoryRepository
+    private lateinit var authRepository: com.personal.apptruyen.data.repository.ISourceAuthRepository
     private lateinit var viewModel: ExploreViewModel
     private val dispatcher = UnconfinedTestDispatcher()
 
@@ -32,6 +33,8 @@ class ExploreViewModelTest {
     fun setup() {
         Dispatchers.setMain(dispatcher)
         repository = mockk(relaxed = true)
+        authRepository = mockk(relaxed = true)
+        every { authRepository.loginRequiredSources } returns kotlinx.coroutines.flow.MutableStateFlow(emptySet())
     }
 
     @AfterEach
@@ -44,7 +47,7 @@ class ExploreViewModelTest {
         runTest {
             coEvery { repository.getCompletedStories(1) } returns listOf(sampleStory)
 
-            viewModel = ExploreViewModel(repository)
+            viewModel = ExploreViewModel(repository, authRepository)
             advanceUntilIdle()
 
             val state = viewModel.state.value
@@ -60,7 +63,7 @@ class ExploreViewModelTest {
             coEvery { repository.getCompletedStories(1) } returns listOf(sampleStory)
             coEvery { repository.getCompletedStories(2) } returns listOf(secondStory)
 
-            viewModel = ExploreViewModel(repository)
+            viewModel = ExploreViewModel(repository, authRepository)
             advanceUntilIdle()
 
             viewModel.loadMore()
@@ -75,7 +78,7 @@ class ExploreViewModelTest {
         runTest {
             coEvery { repository.getCompletedStories(1) } returns listOf(sampleStory)
 
-            viewModel = ExploreViewModel(repository)
+            viewModel = ExploreViewModel(repository, authRepository)
             advanceUntilIdle()
 
             viewModel.refresh()
@@ -91,7 +94,7 @@ class ExploreViewModelTest {
         runTest {
             coEvery { repository.getCompletedStories(1) } returns emptyList()
 
-            viewModel = ExploreViewModel(repository)
+            viewModel = ExploreViewModel(repository, authRepository)
             advanceUntilIdle()
 
             val state = viewModel.state.value
@@ -103,11 +106,19 @@ class ExploreViewModelTest {
         runTest {
             coEvery { repository.getCompletedStories(1) } throws RuntimeException("Network error")
 
-            viewModel = ExploreViewModel(repository)
+            viewModel = ExploreViewModel(repository, authRepository)
             advanceUntilIdle()
 
             val state = viewModel.state.value
             assertNotNull(state.error)
             assertFalse(state.isLoading)
+        }
+
+    @Test
+    fun `dismissLoginPrompt delegates to authRepository`() =
+        runTest {
+            viewModel = ExploreViewModel(repository, authRepository)
+            viewModel.dismissLoginPrompt("wikidich")
+            verify { authRepository.clearLoginRequired("wikidich") }
         }
 }

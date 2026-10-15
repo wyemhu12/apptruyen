@@ -192,6 +192,14 @@ class StoryDetailViewModel
                                 _state.update { s -> s.copy(readingProgress = updatedProgress) }
                             }.launchIn(viewModelScope)
 
+                    repository
+                        .observeStory(story.id)
+                        .onEach { updatedStory ->
+                            if (updatedStory != null) {
+                                _state.update { s -> s.copy(story = updatedStory) }
+                            }
+                        }.launchIn(viewModelScope)
+
                     // Phase 2: Background crawl remaining pages (2..totalPages)
                     if (totalPages > 1) {
                         backgroundCrawlJob?.cancel()

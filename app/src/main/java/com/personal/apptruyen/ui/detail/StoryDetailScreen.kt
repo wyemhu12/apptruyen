@@ -350,6 +350,18 @@ private fun HeroSection(story: Story) {
                                 .background(shimmerBrush()),
                     )
                 },
+                error = {
+                    Box(
+                        modifier =
+                            Modifier
+                                .fillMaxSize()
+                                .background(
+                                    Brush.linearGradient(
+                                        colors = listOf(GradientAmberStart, GradientAmberEnd),
+                                    ),
+                                ),
+                    )
+                },
             )
         } else {
             Box(
@@ -390,11 +402,11 @@ private fun HeroSection(story: Story) {
             horizontalArrangement = Arrangement.spacedBy(16.dp),
         ) {
             // Cover image card
-            if (story.coverImageUrl.isNotBlank()) {
-                Card(
-                    shape = RoundedCornerShape(12.dp),
-                    elevation = CardDefaults.cardElevation(defaultElevation = 8.dp),
-                ) {
+            Card(
+                shape = RoundedCornerShape(12.dp),
+                elevation = CardDefaults.cardElevation(defaultElevation = 8.dp),
+            ) {
+                if (story.coverImageUrl.isNotBlank()) {
                     SubcomposeAsyncImage(
                         model =
                             ImageRequest
@@ -412,7 +424,44 @@ private fun HeroSection(story: Story) {
                                         .background(shimmerBrush()),
                             )
                         },
+                        error = {
+                            Box(
+                                modifier =
+                                    Modifier
+                                        .fillMaxSize()
+                                        .background(
+                                            Brush.linearGradient(
+                                                colors = listOf(GradientAmberStart, GradientAmberEnd),
+                                            ),
+                                        ),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                Text(
+                                    text = story.title.take(1).uppercase(),
+                                    style = MaterialTheme.typography.headlineMedium,
+                                    color = Color.White,
+                                )
+                            }
+                        },
                     )
+                } else {
+                    Box(
+                        modifier =
+                            Modifier
+                                .size(100.dp, 140.dp)
+                                .background(
+                                    Brush.linearGradient(
+                                        colors = listOf(GradientAmberStart, GradientAmberEnd),
+                                    ),
+                                ),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text(
+                            text = story.title.take(1).uppercase(),
+                            style = MaterialTheme.typography.headlineMedium,
+                            color = Color.White,
+                        )
+                    }
                 }
             }
 

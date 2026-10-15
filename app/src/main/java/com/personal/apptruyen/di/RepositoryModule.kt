@@ -2,10 +2,14 @@ package com.personal.apptruyen.di
 
 import com.personal.apptruyen.data.repository.DownloadRepository
 import com.personal.apptruyen.data.repository.IDownloadRepository
+import com.personal.apptruyen.data.repository.IPokemonRepository
 import com.personal.apptruyen.data.repository.IReadingProgressRepository
+import com.personal.apptruyen.data.repository.ISourceAuthRepository
 import com.personal.apptruyen.data.repository.IStoryRepository
 import com.personal.apptruyen.data.repository.ITextReplacementRepository
+import com.personal.apptruyen.data.repository.PokemonRepository
 import com.personal.apptruyen.data.repository.ReadingProgressRepository
+import com.personal.apptruyen.data.repository.SourceAuthRepository
 import com.personal.apptruyen.data.repository.StoryRepository
 import com.personal.apptruyen.data.repository.TextReplacementRepository
 import dagger.Binds
@@ -37,4 +41,12 @@ abstract class RepositoryModule {
     @Binds
     @Singleton
     abstract fun bindReadingProgressRepository(impl: ReadingProgressRepository): IReadingProgressRepository
+
+    @Binds
+    @Singleton
+    abstract fun bindSourceAuthRepository(impl: SourceAuthRepository): ISourceAuthRepository
+
+    @Binds
+    @Singleton
+    abstract fun bindPokemonRepository(impl: PokemonRepository): IPokemonRepository
 }

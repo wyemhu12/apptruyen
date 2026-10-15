@@ -241,7 +241,10 @@ fun StoryCardPremium(
                         val label =
                             when (story.sourceId) {
                                 "truyencom" -> "TC"
+                                "truyenfull" -> "TF"
                                 "tangthuvien" -> "TTV"
+                                "sstruyen" -> "SST"
+                                "wikidich" -> "WD"
                                 else -> story.sourceId.take(3).uppercase()
                             }
                         Surface(
@@ -416,7 +419,10 @@ fun StoryCardGrid(
                     val label =
                         when (story.sourceId) {
                             "truyencom" -> "TC"
+                            "truyenfull" -> "TF"
                             "tangthuvien" -> "TTV"
+                            "sstruyen" -> "SST"
+                            "wikidich" -> "WD"
                             else -> story.sourceId.take(3).uppercase()
                         }
                     Surface(

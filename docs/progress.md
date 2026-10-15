@@ -1,8 +1,8 @@
 # Tiến độ phát triển
 
-> **Cập nhật lần cuối:** 2026-06-09
+> **Cập nhật lần cuối:** 2026-10-15 21:18
 
-## Phiên bản hiện tại: v2.8.3
+## Phiên bản hiện tại: v3.0.1
 
 ## MVP Status
 
@@ -14,7 +14,12 @@
 - [x] **Feature: Auto Format** — Tự động định dạng văn bản chương truyện (2026-06-09)
 - [x] **Data models** — Story, Chapter, ReadingProgress (2026-02-11)
 - [x] **Room database** — 3 entities, 3 DAOs, AppDatabase (2026-02-11)
-- [x] **Web scraper** — TruyenComScraper + TangThuVienScraper + SsTruyenScraper + TruyenFullScraper (search, detail, chapter list, content) (2026-02-11 → 2026-05-30)
+- [x] **Web scraper** — TangThuVienScraper + SsTruyenScraper + WikidichScraper (search, detail, chapter list, content) (2026-02-11 → 2026-10-13)
+- [x] **Nâng cấp nguồn SsTruyen (`sstruyen.pics`)** — Chuyển từ domain cũ `sstruyen.net` sang `sstruyen.pics` (58.265 truyện, 93 thể loại), REST API danh sách chương, bộ lọc completed, sort=updatedAt, Tailwind prose, tương thích ngược 100% dữ liệu đã tải (2026-10-13)
+- [x] **Khắc phục 3 lỗi vận hành nguồn SsTruyen (`sstruyen.pics`)** — Hiển thị số chương khi tìm kiếm (`dateModified`), nạp trọn vẹn 93 thể loại qua REST API `/genres`, nạp `novelId` qua `/novels/{slug}` tải đầy đủ 100% chương không bị đứt đoạn (2026-10-13)
+- [x] **Tích hợp nguồn Wikidich (`wikicv.org`)** — Giải mã chữ ký fuzzySign SHA-256, phân trang AJAX 99 chương/trang, 46 thể loại, lọc watermark (2026-10-13)
+- [x] **Hạ tầng xác thực nguồn truyện (Source Auth)** — Đăng nhập WebView SSO (Dịch Tiếng Hoa) + dán cookie session `express.sid`, CookieStore an toàn, banner nhắc đăng nhập Search/Explore, Settings UI (2026-10-13)
+- [x] **Gỡ bỏ nguồn trực tuyến TruyenFull & TruyenCom** — Gỡ cào trực tuyến, bảo toàn toàn bộ dữ liệu đọc offline trong Room DB (2026-10-13)
 - [x] **TTS: Thêm mức tốc độ** — Slider 0.5x–2.0x bước 0.05 (2026-02-11)
 - [x] **TTS: Background playback** — Foreground Service + WakeLock (2026-02-11)
 - [x] **TTS: Headphone controls** — MediaSession (2026-02-11)
@@ -100,6 +105,9 @@
 - [x] **LazyColumn Keys** — Explicit keys cho ExploreScreen, StoryDetailScreen, ChapterListPanel (2026-06-07)
 - [x] **Baseline Profiles** — profileinstaller:1.4.1 + baseline-prof.txt cho AOT compilation (2026-06-07)
 - [x] **Crash Reporting** — CrashHandler local lưu crash logs vào file, hiển thị trong Settings, sao chép/xóa (2026-06-07)
+- [x] **Major Architecture Upgrades** — Media3 Session 1.11.1 (`TtsPlayer`, `TtsPlaybackStateMachine`, `MediaSessionService`), Room 3.0.3 KMP (`androidx.room3` + `BundledSQLiteDriver 2.7.1` + `DatabaseTransactionRunner`), Kotlin 2.4.21 + KSP 2.3.12 + kotlinx-serialization 1.11.0, AGP 9.4.0 + Gradle 9.6.0 (2026-10-14)
+- [x] **Parallel Batch Download (Tải song song theo lô)** — Tải đồng thời 4 chương/lô (`DOWNLOAD_BATCH_SIZE = 4`), tự động sắp xếp theo `chapterNumber` tăng dần trước khi lưu Room DB và phát tiến độ, giảm 8x thời gian chờ điều tiết giữa các lô (`250ms`/lô), dừng sớm an toàn khi hết hạn phiên đăng nhập (kèm thông báo tiếng Việt nhắc đăng nhập lại) hoặc khi 3 lô liên tiếp lỗi hoàn toàn (2026-10-14)
+- [x] **Từ điển Pokémon khi đọc truyện (Pokemon Image Hover / Lookup)** — Nhận diện tên Pokémon đa ngôn ngữ (Việt/Romaji, Hán-Việt + biến thể đồng nhân/convert, Anh, Trung, Nhật; 1.025 loài, 1.309 hình thái) bằng Trie Longest-Match-First trên `Dispatchers.Default`, gạch chân nét đứt màu nổi bật trên `ReaderScreen` (không ảnh hưởng chuỗi gốc TTS), chạm để mở hộp thoại xem ảnh chính thức (Coil 3), huy hiệu 18 hệ tiếng Việt, chuyển đổi hình thái (Mặc định, Siêu Cấp/Mega, Gigamax, Alola, Galar, Hisui, Paldea...) và ngôn ngữ hiển thị, mặc định BẬT (2026-10-14)
 
 ---
 
@@ -188,4 +196,17 @@
 | 2026-06-07 | **F6: Auto-scroll Reader**: Tự cuộn trang khi đọc, tốc độ 1-10x configurable, toggle/slider trong ReaderSettingsPanel, indicator overlay, pause on touch, DataStore persistence |
 | 2026-06-07 | **Performance**: Compose Stability (7 VMs → ImmutableList), LazyColumn keys (3 fixes), Baseline Profiles (profileinstaller + baseline-prof.txt), 3 new deps (kotlinx-collections-immutable, kotlinx-serialization-json, profileinstaller) |
 | 2026-06-07 | **Release v2.7** (versionCode 38): Backup/Restore (SAF), T? cu?n trang (Auto-scroll), Haptic feedback, Search Autocomplete, Compose Performance improvements |
-| 2026-06-09 | **Release v2.8.3** (versionCode 39): T�nh nang T? d?ng format chuong truy?n |
+| 2026-07-20 | **Cập nhật LacaTruyen**: Cài đặt Native Decryption logic bỏ qua WebView |
+| 2026-06-09 | **Release v2.8.3** (versionCode 39): T�nh nang T? d?ng format chuong truy?n |
+| 2026-07-21 | **Cập nhật nguồn Tàng Thư Viện mới**: Hỗ trợ trang tangthuvien.org (React/Next.js). Tính năng: tạo danh sách chương giả từ tổng số chương, migrate URL cũ, filter search/genre đầy đủ. |
+| 2026-07-21 | **Sửa lỗi lọc và TextFormatHelper**: Cập nhật selector để tìm toàn bộ truyện và bỏ rule tự động ngắt dòng bằng dấu gạch ngang (Tàng Thư Viện) |
+| 2026-10-11 | **Governance**: Adopt hệ thống rules + planner/reviewer/qa + Code Freeze Guard từ AURORA/Vikini vào `.agents/` (gộp `.agent/`), thêm `docs/plans/`, `docs/specs/`, `docs/lessons-learned.md` |
+| 2026-10-12 | **Governance Audit Remediation**: Khắc phục 19 audit findings (F01–F19) và bypass bảo mật. Bổ sung plan-approval.js, review-run.js, bộ 53 unit tests pass 100%, sandbox Claude CLI không Bash, pending writes lock chống TOCTOU. |
+| 2026-10-13 | **Nguồn Wikidich, Hạ tầng Source Auth, Gỡ TruyenFull & TruyenCom**: Tích hợp WikidichScraper (`wikicv.org`) kèm chữ ký fuzzySign SHA-256 + AJAX phân trang; xây dựng hạ tầng Source Authentication (WebView login forum SSO + dialog dán cookie session `express.sid`, CookieStore, banner nhắc đăng nhập); gỡ bỏ nguồn trực tuyến TruyenCom & TruyenFull nhưng bảo toàn toàn bộ dữ liệu đọc offline trong Room DB. |
+| 2026-10-13 | **Nâng cấp nguồn SsTruyen (`sstruyen.pics`)**: Chuyển từ domain cũ `sstruyen.net` sang `sstruyen.pics` (kho 58.265 truyện, 82 thể loại); tích hợp REST API danh sách chương (`api.sstruyen.pics`), tự phục hồi cache `novelId`, lọc hoàn thành `status=completed`, sắp xếp mới nhất `sort=updatedAt`, nội dung Tailwind `div.prose`; tương thích ngược 100% URL chương cũ `sstruyen.net` (kế thừa 9 selector và xử lý `<br>`), bảo toàn tiêu đề và nội dung chương đã tải offline trong Room DB. |
+| 2026-10-14 | **Nâng cấp kiến trúc lớn (Media3, Room 3, Kotlin 2.4, AGP 9.4)**: Chuyển TTS sang `androidx.media3:media3-session:1.11.1` (`MediaSessionService`, `TtsPlayer` kế thừa `SimpleBasePlayer`, `TtsPlaybackStateMachine` bảo toàn trạng thái auto-advance); nâng cấp DB lên `androidx.room3:3.0.3` + `sqlite-bundled:2.7.1` + `DatabaseTransactionRunner`; nâng cấp Kotlin `2.4.21`, KSP `2.3.12`, `kotlinx-serialization-json:1.11.0`, AGP `9.4.0` và Gradle `9.6.0`. |
+| 2026-10-14 | **Tối ưu tốc độ tải chương song song theo lô**: `DownloadRepository.downloadChapters` tải đồng thời 4 chương/lô (`DOWNLOAD_BATCH_SIZE = 4`), sắp xếp kết quả theo `chapterNumber` tăng dần trước khi lưu tuần tự vào Room DB và phát `DownloadProgress`, giảm delay điều tiết xuống 250ms giữa các lô, fail-fast khi gặp `LoginRequiredException` (báo tiếng Việt nhắc đăng nhập lại trên `DownloadService`) hoặc sau 3 lô liên tiếp lỗi hoàn toàn. Bổ sung 11 unit tests mới (`DownloadRepositoryTest`, `DownloadServiceTest`). |
+| 2026-10-14 | **Từ điển Pokémon khi đọc truyện (Pokemon Image Hover / Lookup)**: Tích hợp `pokemon_pokedex.json` (1.025 loài, 1.309 hình thái, tên Việt/Romaji, Hán-Việt + đồng nhân/convert, Anh, Trung, Nhật), bộ nhận diện Trie Longest-Match-First (`PokemonLookupHelper`, `PokemonRepository`), gạch chân nét đứt trên `ReaderScreen` (`ReaderPokemonSupport`) và hộp thoại `PokemonLookupDialog` xem ảnh chính thức (Coil 3), huy hiệu 18 hệ tiếng Việt (`PokemonTypeColors`), chuyển đổi hình thái & ngôn ngữ, mặc định BẬT trong `SettingsDataStore` (`POKEMON_LOOKUP_ENABLED = true`). Bổ sung 9 unit tests (`PokemonLookupHelperTest`, `ReaderViewModelTest`). |
+| 2026-10-14 | **Release v3.0.0** (versionCode 48): Nâng cấp kiến trúc lớn (Media3 1.11.1, Room 3.0.3, Kotlin 2.4.21, AGP 9.4.0), Tải chương song song theo lô (4 chương/lô), Từ điển Pokémon khi đọc truyện (1.025 loài, 1.309 hình thái, tên Hán-Việt + đồng nhân), sửa lỗi tìm kiếm/bộ lọc Wikidich và ảnh bìa SsTruyện (`apptruyenv300.apk`). |
+| 2026-10-15 | **Release v3.0.1** (versionCode 49): Khắc phục lỗi tự động ngắt dòng ở từ ghép/tên riêng có dấu gạch nối (`Spider-Man` → `Spider\n-Man`) trong `TextFormatHelper.formatChapter`, bổ sung `TextFormatHelperTest` (`apptruyenv301.apk`). |
+

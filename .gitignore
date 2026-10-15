@@ -59,3 +59,7 @@ package-lock.json
 
 # Temp files
 test.kt
+
+# Agent governance: emergency approval marker & pending plan writes lock
+.agents/.plan-approved
+.agents/.pending-plan-writes.json

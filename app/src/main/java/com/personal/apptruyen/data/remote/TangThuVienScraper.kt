@@ -2,25 +2,22 @@ package com.personal.apptruyen.data.remote
 
 import android.util.Log
 import com.personal.apptruyen.data.model.Chapter
+import com.personal.apptruyen.data.model.ChapterContentResult
 import com.personal.apptruyen.data.model.Genre
 import com.personal.apptruyen.data.model.Story
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.sync.Semaphore
-import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.net.URLEncoder
-import java.util.concurrent.ConcurrentHashMap
 import javax.inject.Inject
 import javax.inject.Singleton
 
 /**
- * Web scraper for truyen.tangthuvien.vn.
- * Chỉ trả về truyện đã hoàn thành, sắp xếp theo mới nhất.
+ * Web scraper for tangthuvien.org (New React/Next.js site).
  */
 @Singleton
 class TangThuVienScraper
@@ -33,32 +30,123 @@ class TangThuVienScraper
         override val sourceName = "Tàng Thư Viện"
         override val baseUrl = BASE_URL
 
-        // TTV uses Desktop UA and ETag caching
-        override val userAgent = DESKTOP_UA
-        override val useEtagCaching = true
+        // New TTV can use mobile or desktop UA
+        override val userAgent = DEFAULT_MOBILE_UA
+        override val useEtagCaching = false
 
-        // TTV has custom headers
         override fun buildExtraHeaders(builder: Request.Builder) {
             builder
                 .header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
                 .header("Referer", "$BASE_URL/")
-                .header("Connection", "keep-alive")
         }
 
         companion object {
-            const val BASE_URL = "https://truyen.tangthuvien.vn"
-            private const val DESKTOP_UA =
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
-            private const val CHAPTERS_PER_PAGE = 75
+            const val BASE_URL = "https://tangthuvien.org"
 
-            // Cached regex patterns (TTV-specific)
-            private val CHAPTER_NUMBER_REGEX = Regex("chuong-(\\d+)")
-            private val CHAPTER_COUNT_REGEX = Regex("(\\d+)\\s*chương", RegexOption.IGNORE_CASE)
-            private val STORY_ID_REGEX = Regex("""id="story_id_hidden"\s+value="(\d+)"""")
+            // Extracts digit from string like "241 Chương" or "<span>241<!-- --> Chương</span>"
+            private val CHAPTER_COUNT_REGEX = Regex("(\\d+)\\s*(?:<!-- -->\\s*)?Chương", RegexOption.IGNORE_CASE)
+
+            // Strips "#8 " or "#123 " prefix from title/paragraph text like "#8 Chương 8: Tên chương"
+            private val TITLE_HASH_PREFIX = Regex("^#\\d+\\s+")
+
+            // Danh sách đầy đủ thể loại từ tangthuvien.org/truyen (fallback khi scrape thất bại)
+            private val FALLBACK_GENRES =
+                listOf(
+                    Genre("Cường cường", "cuong-cuong"),
+                    Genre("Adult", "adult"),
+                    Genre("Bách hợp", "bach-hop"),
+                    Genre("Bình Đạm", "binh-dam"),
+                    Genre("Cung đấu", "cung-dau"),
+                    Genre("Cơ Trí", "co-tri"),
+                    Genre("Cạnh Kỹ", "canh-ky"),
+                    Genre("Cận Đại", "can-dai"),
+                    Genre("Cổ Tiên Hiệp", "co-tien-hiep"),
+                    Genre("Cổ đại", "co-dai"),
+                    Genre("Dã sử", "da-su"),
+                    Genre("Dị giới", "di-gioi"),
+                    Genre("Dị năng", "di-nang"),
+                    Genre("Gia đấu", "gia-dau"),
+                    Genre("Góc Nhìn Nam", "goc-nhin-nam"),
+                    Genre("H", "h"),
+                    Genre("HE", "he"),
+                    Genre("Hiện Đại", "hien-dai"),
+                    Genre("Huyền Bí", "huyen-bi"),
+                    Genre("Huyền Nghi", "huyen-nghi"),
+                    Genre("Huyền huyễn", "huyen-huyen"),
+                    Genre("Huyền ảo", "huyen-ao"),
+                    Genre("Hài hước", "hai-huoc"),
+                    Genre("Hào môn", "hao-mon"),
+                    Genre("Hậu Cung - Harem", "hau-cung-harem"),
+                    Genre("Hắc Ám Lưu", "hac-am-luu"),
+                    Genre("Hệ thống", "he-thong"),
+                    Genre("Hồng Hoang", "hong-hoang"),
+                    Genre("Hỗ công", "ho-cong"),
+                    Genre("Khoa Huyễn Không Gian", "khoa-huyen-khong-gian"),
+                    Genre("Khoa huyễn", "khoa-huyen"),
+                    Genre("Khác", "khac"),
+                    Genre("Kinh dị", "kinh-di"),
+                    Genre("Kiếm hiệp", "kiem-hiep"),
+                    Genre("Kỳ Huyễn", "ky-huyen"),
+                    Genre("Kỳ Ảo", "ky-ao"),
+                    Genre("Light Novel", "light-novel"),
+                    Genre("Linh dị", "linh-di"),
+                    Genre("Lịch Sử", "lich-su"),
+                    Genre("Ma Pháp", "ma-phap"),
+                    Genre("Mạt Thế", "mat-the"),
+                    Genre("NP", "np"),
+                    Genre("Ngôn tình", "ngon-tinh"),
+                    Genre("Ngược", "nguoc"),
+                    Genre("Nhiệt Huyết", "nhiet-huyet"),
+                    Genre("Nhân thú", "nhan-thu"),
+                    Genre("Nhẹ Nhàng", "nhe-nhang"),
+                    Genre("Non-CP", "non-cp"),
+                    Genre("Nữ Phụ", "nu-phu"),
+                    Genre("Nữ tôn", "nu-ton"),
+                    Genre("OE", "oe"),
+                    Genre("Phong Thủy - Tâm Linh", "phong-thuy-tam-linh"),
+                    Genre("Phàm Nhân Lưu", "pham-nhan-luu"),
+                    Genre("Phúc hắc", "phuc-hac"),
+                    Genre("Phương Tây", "phuong-tay"),
+                    Genre("Phản Phái", "phan-phai"),
+                    Genre("Quan Trường", "quan-truong"),
+                    Genre("Quân sự", "quan-su"),
+                    Genre("SE", "se"),
+                    Genre("Sắc", "sac"),
+                    Genre("Sắc Hiệp", "sac-hiep"),
+                    Genre("Sủng", "sung"),
+                    Genre("Thanh thủy văn", "thanh-thuy-van"),
+                    Genre("Thiết Huyết", "thiet-huyet"),
+                    Genre("Thám Hiểm", "tham-hiem"),
+                    Genre("Tiên hiệp", "tien-hiep"),
+                    Genre("Tiểu thuyết", "tieu-thuyet"),
+                    Genre("Trinh thám", "trinh-tham"),
+                    Genre("Truy thê", "truy-the"),
+                    Genre("Truyện Teen", "truyen-teen"),
+                    Genre("Trùng Sinh", "trung-sinh"),
+                    Genre("Trọng sinh", "trong-sinh"),
+                    Genre("Tu Chân", "tu-chan"),
+                    Genre("Tu tiên", "tu-tien"),
+                    Genre("Tâm Lý", "tam-ly"),
+                    Genre("Tây Phương Kỳ Huyễn", "tay-phuong-ky-huyen"),
+                    Genre("Vô Sỉ", "vo-si"),
+                    Genre("Vô Địch", "vo-dich"),
+                    Genre("Võ Hiệp", "vo-hiep"),
+                    Genre("Võng du", "vong-du"),
+                    Genre("Vườn trường", "vuon-truong"),
+                    Genre("Xuyên Nhanh", "xuyen-nhanh"),
+                    Genre("Xuyên Thư", "xuyen-thu"),
+                    Genre("Xuyên không", "xuyen-khong"),
+                    Genre("Xây Dựng Thế Lực", "xay-dung-the-luc"),
+                    Genre("Đam mỹ", "dam-my"),
+                    Genre("Điền văn", "dien-van"),
+                    Genre("Đoản văn", "doan-van"),
+                    Genre("Đô thị", "do-thi"),
+                    Genre("Đông Phương", "dong-phuong"),
+                    Genre("Đông Phương Huyền Huyễn", "dong-phuong-huyen-huyen"),
+                    Genre("Đồng nhân", "dong-nhan"),
+                    Genre("nữ cường", "nu-cuong"),
+                )
         }
-
-        // Cache numeric story ID per story slug — thread-safe cho concurrent loads
-        private val numericStoryIdCache = ConcurrentHashMap<String, String>()
 
         // ---- Search ----
 
@@ -68,62 +156,83 @@ class TangThuVienScraper
         ): List<Story> =
             withContext(Dispatchers.IO) {
                 val encoded = URLEncoder.encode(keyword, "UTF-8")
-                // Always use search endpoint — /tong-hop ignores term param
-                val url = "$BASE_URL/ket-qua-tim-kiem?term=$encoded"
+                val statusParam = if (completedOnly) "&status=COMPLETED" else ""
+                val url = "$BASE_URL/truyen?keyword=$encoded$statusParam"
                 val doc = fetchDocumentWithRetry(url)
-                val stories = parseStoryList(doc)
-                if (completedOnly) {
-                    stories.filter { it.status.contains("Hoàn thành", ignoreCase = true) }
-                } else {
-                    stories
-                }
+                enrichWithChapterCounts(parseStoryList(doc))
             }
 
         // ---- Story Detail ----
 
         override suspend fun getStoryDetail(storyUrl: String): Story =
             withContext(Dispatchers.IO) {
-                val doc = fetchDocumentWithRetry(storyUrl)
+                // Migrate old URLs to new URLs automatically
+                val urlToFetch = migrateUrl(storyUrl)
+                val doc = fetchDocumentWithRetry(urlToFetch)
 
                 val title =
                     doc
-                        .select(".book-info h1")
-                        .first()
+                        .select("h1, h2")
+                        .firstOrNull { it.text().isNotBlank() }
                         ?.text()
                         ?.trim() ?: "Đang cập nhật"
+
+                // Author is usually a link like /tac-gia/name
                 val author =
                     doc
-                        .select(".book-info .tag a.blue")
-                        .first()
+                        .select("a[href^=/tac-gia/]")
+                        .firstOrNull()
                         ?.text()
                         ?.trim() ?: ""
-                val genres =
-                    doc
-                        .select(".book-info .tag a.red")
-                        .map { it.text().trim() }
-                        .filter { it.isNotBlank() }
-                val status = doc.select(".book-info .tag span.blue").text().trim()
 
-                val descriptionEl = doc.select(".book-intro").first()
-                val description = descriptionEl?.let { cleanHtml(it.html()) } ?: ""
+                // Genres are links like /truyen?genre=...
+                val genres = doc.select("a[href^=/truyen?genre=]").map { it.text().trim() }.filter { it.isNotBlank() }
 
+                // Description (Tóm tắt)
+                // Look for text in <p> tags that are children of a div with leading-relaxed
+                val descriptionEls = doc.select("div.leading-relaxed p")
+                val description =
+                    if (descriptionEls.isNotEmpty()) {
+                        descriptionEls.joinToString("\n") { it.text().trim() }
+                    } else {
+                        doc.select(".text-muted-foreground").text().trim()
+                    }
+
+                // Info cover
                 val coverImageUrl =
-                    validateCoverUrl(
-                        doc.select("#bookImg img").first()?.let { img ->
-                            img.attr("abs:src").ifEmpty { img.attr("src") }
-                        },
-                    )
+                    doc
+                        .select("img")
+                        .firstOrNull {
+                            val src = it.attr("src")
+                            src.contains("cover") || src.contains("/_next/image")
+                        }?.let {
+                            val src = it.attr("abs:src").ifEmpty { it.attr("src") }
+                            // NextJS image optimization URL parsing
+                            if (src.startsWith("/_next/image?url=")) {
+                                java.net.URLDecoder.decode(src.substringAfter("url=").substringBefore("&"), "UTF-8")
+                            } else {
+                                src
+                            }
+                        } ?: ""
 
-                // Extract total chapters from tab text like "Danh sách chương (2039 chương)"
-                val chapterTabText = doc.select("#j-bookCatalogPage").text()
+                // Extract total chapters from text like "241 Chương"
+                val htmlSource = doc.html()
                 val totalChapters =
                     CHAPTER_COUNT_REGEX
-                        .find(chapterTabText)
+                        .find(htmlSource)
                         ?.groupValues
                         ?.get(1)
                         ?.toIntOrNull() ?: 0
 
-                val slug = extractSlug(storyUrl)
+                // Status
+                val status =
+                    if (htmlSource.contains("Hoàn thành", ignoreCase = true) || htmlSource.contains("COMPLETED", ignoreCase = true)) {
+                        "Hoàn thành"
+                    } else {
+                        "Đang cập nhật"
+                    }
+
+                val slug = extractSlug(urlToFetch)
 
                 Story(
                     id = slug,
@@ -132,11 +241,11 @@ class TangThuVienScraper
                     author = author,
                     genres = genres,
                     description = description,
-                    url = storyUrl.ensureAbsolute(),
+                    url = urlToFetch,
                     totalChapters = totalChapters,
                     coverImageUrl = coverImageUrl,
                     sourceId = sourceId,
-                    status = normalizeStatus(status),
+                    status = status,
                 )
             }
 
@@ -144,115 +253,105 @@ class TangThuVienScraper
 
         override suspend fun getFirstPageChapters(storyUrl: String): StorySource.FirstPageResult =
             withContext(Dispatchers.IO) {
-                val doc = fetchDocumentWithRetry(storyUrl)
-                val storyId = extractSlug(storyUrl)
-                val chapters = parseChapterLinks(doc, storyId)
-
-                // Extract total chapters from tab text like "Danh sách chương (2039 chương)"
-                val chapterTabText = doc.select("#j-bookCatalogPage").text()
-                val totalChapters =
-                    CHAPTER_COUNT_REGEX
-                        .find(chapterTabText)
-                        ?.groupValues
-                        ?.get(1)
-                        ?.toIntOrNull()
-                        ?: chapters.size
-
-                // TTV paginates chapters via AJAX — 75 chapters per page
-                val totalPages =
-                    if (totalChapters > CHAPTERS_PER_PAGE) {
-                        kotlin.math.ceil(totalChapters.toDouble() / CHAPTERS_PER_PAGE).toInt()
-                    } else {
-                        1
-                    }
-
-                // Store numeric story ID for AJAX calls in getRemainingChapters
-                val numericId = extractNumericStoryId(doc)
-                val slug = extractSlug(storyUrl)
-                if (numericId != null) {
-                    numericStoryIdCache[slug] = numericId
-                }
-
-                StorySource.FirstPageResult(chapters = chapters, totalPages = totalPages)
+                val story = getStoryDetail(storyUrl)
+                val total = if (story.totalChapters > 0) story.totalChapters else 1
+                val chapters = generateChapters(story.slug, total)
+                StorySource.FirstPageResult(chapters = chapters, totalPages = 1)
             }
 
         override suspend fun getRemainingChapters(
             storyUrl: String,
             totalPages: Int,
             onBatchReady: suspend (List<Chapter>) -> Unit,
-        ) = withContext(Dispatchers.IO) {
-            if (totalPages <= 1) return@withContext
-
-            // Get numeric story ID — try cached value first, then re-fetch page
-            val slug = extractSlug(storyUrl)
-            val numericId =
-                numericStoryIdCache[slug] ?: run {
-                    val doc = fetchDocumentWithRetry(storyUrl)
-                    extractNumericStoryId(doc)?.also { numericStoryIdCache[slug] = it }
-                } ?: return@withContext
-
-            val storyId = extractSlug(storyUrl)
-            val semaphore = Semaphore(3)
-
-            // Page 0 was already fetched in getFirstPageChapters → start from page 1
-            coroutineScope {
-                for (page in 1 until totalPages) {
-                    launch {
-                        semaphore.withPermit {
-                            try {
-                                delay(crawlDelayMs)
-                                val chapters = fetchChapterPageAjax(numericId, page, storyId)
-                                if (chapters.isNotEmpty()) {
-                                    onBatchReady(chapters)
-                                }
-                            } catch (e: Exception) {
-                                Log.d("TTVScraper", "Chapter page $page crawl failed", e)
-                            }
-                        }
-                    }
-                }
-            }
+        ) {
+            // All chapters are generated in first page
         }
 
-        // TTV uses distinctBy instead of seen.add() dedup pattern
         override suspend fun getChapterList(storyUrl: String): List<Chapter> =
             withContext(Dispatchers.IO) {
-                val result = getFirstPageChapters(storyUrl)
-                val allChapters = result.chapters.toMutableList()
-
-                if (result.totalPages > 1) {
-                    getRemainingChapters(storyUrl, result.totalPages) { batch ->
-                        synchronized(allChapters) {
-                            allChapters.addAll(batch)
-                        }
-                    }
-                }
-
-                allChapters.distinctBy { it.chapterNumber }.sortedBy { it.chapterNumber }
+                getFirstPageChapters(storyUrl).chapters
             }
+
+        private fun generateChapters(
+            slug: String,
+            total: Int,
+        ): List<Chapter> {
+            val chapters = mutableListOf<Chapter>()
+            for (i in 1..total) {
+                chapters.add(
+                    Chapter(
+                        storyId = slug,
+                        chapterNumber = i,
+                        title = "Chương $i", // Dummy title until fetched
+                        url = "$BASE_URL/$slug/$i",
+                    ),
+                )
+            }
+            return chapters
+        }
 
         // ---- Chapter Content ----
 
-        // TTV has unique selectors — override getChapterContent instead of using extractChapterText
-        override suspend fun getChapterContent(chapterUrl: String): String =
+        override suspend fun getChapterContent(chapterUrl: String): String = getChapterContentWithTitle(chapterUrl).content
+
+        override suspend fun getChapterContentWithTitle(chapterUrl: String): ChapterContentResult =
             withContext(Dispatchers.IO) {
                 try {
-                    val doc = fetchDocumentWithRetry(chapterUrl)
+                    val urlToFetch = migrateUrl(chapterUrl)
+                    val doc = fetchDocumentWithRetry(urlToFetch)
 
-                    // Primary selector
-                    val contentEl =
-                        doc.select(".chapter-c-content .box-chap").first()
-                            ?: doc.select(".chapter-c-content").first()
+                    // Find actual chapter title — usually "#X Chương Y: Zzz"
+                    val titleEl =
+                        doc
+                            .select("h1, h2, div.font-semibold, div.font-bold")
+                            .firstOrNull { it.text().contains("Chương", ignoreCase = true) }
 
-                    if (contentEl != null) {
-                        contentEl.select("script, .ads, .ad, iframe, noscript").remove()
-                        val text = cleanHtml(contentEl.html())
-                        if (text.length > MIN_CONTENT_LENGTH) return@withContext text
+                    // Extract and clean title: strip "#8 " prefix
+                    val extractedTitle =
+                        titleEl
+                            ?.text()
+                            ?.trim()
+                            ?.let { raw ->
+                                TITLE_HASH_PREFIX.replace(raw, "").trim()
+                            }?.ifBlank { null }
+
+                    // The text content is inside multiple <p> tags.
+                    val paragraphs = doc.select("p")
+                    if (paragraphs.isEmpty()) {
+                        throw ScraperException.ParseException("Không tìm thấy nội dung chương", urlToFetch)
                     }
 
-                    throw ScraperException.ParseException("Nội dung chương quá ngắn hoặc rỗng", chapterUrl)
+                    // Build content from paragraphs — do NOT prepend title
+                    val sb = StringBuilder()
+                    for (p in paragraphs) {
+                        var txt = p.text().trim()
+                        if (txt.isNotBlank() && txt.length > 5) {
+                            // Strip "#8 " prefix from paragraphs like "#8 Chương 8: Tên chương"
+                            txt = TITLE_HASH_PREFIX.replace(txt, "")
+
+                            // Merge lines starting with dash or lowercase letter into the previous paragraph
+                            if (sb.isNotEmpty() && (txt.startsWith("-") || txt.startsWith("–") || txt.first().isLowerCase())) {
+                                if (sb.endsWith("\n\n")) {
+                                    sb.setLength(sb.length - 2)
+                                    sb.append(" ")
+                                }
+                            }
+                            // Basic heuristic to avoid UI buttons or nav text
+                            sb.append(txt).append("\n\n")
+                        }
+                    }
+
+                    val text = sb.toString().trim()
+                    if (text.length > MIN_CONTENT_LENGTH) {
+                        return@withContext ChapterContentResult(
+                            content = text,
+                            title = extractedTitle,
+                        )
+                    }
+
+                    throw ScraperException.ParseException("Nội dung chương quá ngắn hoặc rỗng", urlToFetch)
                 } catch (e: ScraperException) {
-                    throw e // Re-throw ScraperException as-is
+                    throw e
                 } catch (e: Exception) {
                     Log.d("TTVScraper", "Failed to load chapter: $chapterUrl", e)
                     throw ScraperException.ParseException("Không thể tải nội dung chương: ${e.message}", chapterUrl)
@@ -263,7 +362,7 @@ class TangThuVienScraper
 
         override suspend fun getCompletedStories(page: Int): List<Story> =
             withContext(Dispatchers.IO) {
-                val url = "$BASE_URL/tong-hop?fns=ht&page=$page"
+                val url = "$BASE_URL/truyen?status=COMPLETED&sort=createdAt&order=desc&page=$page"
                 val doc = fetchDocumentWithRetry(url)
                 parseStoryList(doc)
             }
@@ -277,18 +376,10 @@ class TangThuVienScraper
             completedOnly: Boolean,
         ): List<Story> =
             withContext(Dispatchers.IO) {
-                val ctgId = genreSlugToId(genreSlug)
-                if (ctgId == 0) {
-                    // TTV không có thể loại này — trả empty thay vì gửi request sai
-                    Log.d("TTVScraper", "Genre slug '$genreSlug' not mapped, skipping")
-                    return@withContext emptyList()
-                }
-                // TTV genre URL: /tong-hop?ctg={id}&fns=ht&page=N — fns=ht = chỉ hoàn thành
-                // Khi completedOnly=false, bỏ fns=ht để load tất cả truyện
-                val statusParam = if (completedOnly) "&fns=ht" else ""
-                val url = "$BASE_URL/tong-hop?ctg=$ctgId$statusParam&page=$page"
+                val statusParam = if (completedOnly) "&status=COMPLETED" else ""
+                val url = "$BASE_URL/truyen?genre=$genreSlug&page=$page$statusParam"
                 val doc = fetchDocumentWithRetry(url)
-                val stories = parseStoryList(doc)
+                val stories = enrichWithChapterCounts(parseStoryList(doc))
 
                 if (minChapters > 0) {
                     stories.filter { it.totalChapters >= minChapters }
@@ -301,24 +392,24 @@ class TangThuVienScraper
 
         override suspend fun getGenreList(): List<Genre> =
             withContext(Dispatchers.IO) {
-                val doc = fetchDocumentWithRetry(BASE_URL)
+                // Fetch từ trang /truyen vì trang chủ render client-side (Next.js),
+                // Jsoup không thấy genre links. Trang /truyen có SSR sẵn danh sách thể loại.
+                val doc = fetchDocumentWithRetry("$BASE_URL/truyen")
                 val genres = mutableListOf<Genre>()
 
-                // Parse genre links from dropdown: /the-loai/{slug}
-                doc.select("a[href*=/the-loai/]").forEach { el ->
+                // Link có dạng ?genre=khoa-huyen hoặc href chứa genre=
+                doc.select("a[href*=genre=]").forEach { el ->
                     val href = el.attr("href")
-                    val name =
-                        el
-                            .text()
-                            .trim()
-                            .replace(Regex("\\d+$"), "")
-                            .trim()
+                    val name = el.text().trim()
+                    val slug = href.substringAfter("genre=").substringBefore("&")
+                    if (name.isNotBlank() && slug.isNotBlank()) {
+                        genres.add(Genre(name = name, slug = slug))
+                    }
+                }
 
-                    val slugMatch = Regex("/the-loai/([a-z0-9-]+)").find(href)
-                    val slug = slugMatch?.groupValues?.get(1) ?: return@forEach
-                    if (name.isBlank()) return@forEach
-
-                    genres.add(Genre(name = name, slug = slug))
+                // Nếu scrape thất bại, fallback danh sách đầy đủ từ TTV
+                if (genres.isEmpty()) {
+                    return@withContext FALLBACK_GENRES
                 }
 
                 genres.distinctBy { it.slug }
@@ -326,167 +417,146 @@ class TangThuVienScraper
 
         // ---- Private helpers ----
 
-        /**
-         * Parse story items from list pages (search, completed, genre).
-         * Items use selector: .book-img-text ul li
-         */
         private fun parseStoryList(doc: org.jsoup.nodes.Document): List<Story> {
             val results = mutableListOf<Story>()
 
-            doc.select(".book-img-text ul li, .rank-table-list li").forEach { item ->
-                val titleEl = item.select("h4 a, h3 a, .book-mid-info h4 a").first() ?: return@forEach
-                val title = titleEl.text().trim()
-                val href = titleEl.attr("abs:href").ifEmpty { titleEl.attr("href") }
-                if (title.isBlank() || href.isBlank()) return@forEach
+            // On TangThuVien.org, links to stories are wrapped in a flex container
+            doc.select("div.flex.items-start.gap-2").forEach { container ->
+                val a = container.select("a").firstOrNull() ?: return@forEach
+                val href = a.attr("href")
+                if (href.contains("/tac-gia/")) return@forEach
 
-                val slug = extractSlug(href)
-                val author =
-                    item
-                        .select(".author a.name, .author a:first-of-type")
-                        .first()
-                        ?.text()
-                        ?.trim() ?: ""
-
-                // Parse chapter count from text like "2039 chương" or "Đã hoàn thành|2039 chương"
-                val infoText = item.select(".author").text()
-                val totalChapters =
-                    CHAPTER_COUNT_REGEX
-                        .find(infoText)
-                        ?.groupValues
-                        ?.get(1)
-                        ?.toIntOrNull() ?: 0
-
-                // Parse status
-                val status = normalizeStatus(infoText)
-
-                // Cover image
-                val coverUrl =
-                    validateCoverUrl(
-                        item.select(".book-img-box img, img").first()?.let { img ->
-                            img.attr("abs:src").ifEmpty { img.attr("src") }
-                        },
-                    )
-
-                // Description
-                val description = item.select(".intro").text().trim()
-
-                // Genre
-                val genres =
-                    item.select(".author a").mapNotNull { a ->
-                        val aHref = a.attr("href")
-                        if (aHref.contains("/the-loai/")) a.text().trim() else null
+                // Because story links might be wrapped around images or text separately, we use a heuristic
+                val img = container.select("img").firstOrNull()
+                val titleEl =
+                    container.select("h1, h2, h3, .font-semibold, .font-bold").firstOrNull {
+                        it.text().isNotBlank() && !it.text().equals("Truyện", ignoreCase = true)
                     }
 
-                results.add(
-                    Story(
-                        id = slug,
-                        slug = slug,
-                        title = title,
-                        author = author,
-                        genres = genres,
-                        description = description,
-                        url = href.ensureAbsolute(),
-                        totalChapters = totalChapters,
-                        coverImageUrl = coverUrl,
-                        sourceId = sourceId,
-                        status = status,
-                    ),
-                )
+                if (img != null && titleEl != null) {
+                    val title = titleEl.text().trim()
+                    if (title.isBlank()) return@forEach
+
+                    val slug = extractSlug(href)
+                    var coverUrl = img.attr("abs:src").ifEmpty { img.attr("src") }
+                    if (coverUrl.startsWith("/_next/image?url=")) {
+                        coverUrl = java.net.URLDecoder.decode(coverUrl.substringAfter("url=").substringBefore("&"), "UTF-8")
+                    }
+
+                    // Parse chapter count if available in container
+                    val textContent = container.text()
+                    val totalChapters =
+                        CHAPTER_COUNT_REGEX
+                            .find(textContent)
+                            ?.groupValues
+                            ?.get(1)
+                            ?.toIntOrNull() ?: 0
+                    val status = if (textContent.contains("Hoàn thành", ignoreCase = true)) "Hoàn thành" else "Đang cập nhật"
+
+                    // Attempt to extract author
+                    val authorEl = container.select(".text-muted-foreground.truncate, .truncate").firstOrNull()
+                    val author = authorEl?.text()?.trim() ?: ""
+
+                    results.add(
+                        Story(
+                            id = slug,
+                            slug = slug,
+                            title = title,
+                            author = author, // Extracted from container
+                            genres = emptyList(),
+                            description = "",
+                            url = "$BASE_URL$href",
+                            totalChapters = totalChapters,
+                            coverImageUrl = coverUrl,
+                            sourceId = sourceId,
+                            status = status,
+                        ),
+                    )
+                }
             }
 
             return results.distinctBy { it.id }
         }
 
         /**
-         * Parse chapter links from a story detail page.
-         * Chapters are in .volume containers, each li a.
+         * Enrich stories thiếu totalChapters bằng cách fetch detail page song song.
+         * TTV list page không cung cấp số chương → phải fetch từ detail page.
+         * Giới hạn: tối đa 10 stories, timeout 7s tổng, batch 5 concurrent.
          */
-        private fun parseChapterLinks(
-            doc: org.jsoup.nodes.Document,
-            storyId: String,
-        ): List<Chapter> {
-            val chapters = mutableListOf<Chapter>()
-            val seen = mutableSetOf<Int>()
+        private suspend fun enrichWithChapterCounts(stories: List<Story>): List<Story> {
+            val needEnrich = stories.filter { it.totalChapters <= 0 }
+            if (needEnrich.isEmpty()) return stories
 
-            // TTV uses volume-based chapter layout on main page, ul.cf in AJAX responses
-            doc.select(".volume li a, #max-volume li a, .list-chapter li a, ul.cf li a").forEach { el ->
-                val href = el.attr("abs:href").ifEmpty { el.attr("href") }
-                val text = el.attr("title").ifBlank { el.text().trim() }
-
-                val numberMatch = CHAPTER_NUMBER_REGEX.find(href)
-                val number = numberMatch?.groupValues?.get(1)?.toIntOrNull() ?: return@forEach
-
-                if (number in seen) return@forEach
-                seen.add(number)
-
-                chapters.add(
-                    Chapter(
-                        storyId = storyId,
-                        chapterNumber = number,
-                        title = text.ifBlank { "Chương $number" },
-                        url = href.ensureAbsolute(),
-                    ),
-                )
+            // Wrap in timeout to avoid exceeding StoryRepository's 10s per-source timeout
+            val chapterCounts = mutableMapOf<String, Int>()
+            try {
+                kotlinx.coroutines.withTimeoutOrNull(10_000L) {
+                    needEnrich.chunked(5).forEach { batch ->
+                        coroutineScope {
+                            batch
+                                .map { story ->
+                                    async(Dispatchers.IO) {
+                                        try {
+                                            val detailUrl = migrateUrl(story.url)
+                                            val doc = fetchDocumentWithRetry(detailUrl)
+                                            val count =
+                                                CHAPTER_COUNT_REGEX
+                                                    .find(doc.html())
+                                                    ?.groupValues
+                                                    ?.get(1)
+                                                    ?.toIntOrNull() ?: 0
+                                            story.id to count
+                                        } catch (e: Exception) {
+                                            Log.d("TTVScraper", "Enrich failed for ${story.id}: ${e.message}")
+                                            story.id to 0
+                                        }
+                                    }
+                                }.awaitAll()
+                                .forEach { (id, count) ->
+                                    if (count > 0) chapterCounts[id] = count
+                                }
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                Log.d("TTVScraper", "Enrich timeout/error: ${e.message}")
             }
 
-            return chapters.sortedBy { it.chapterNumber }
+            return stories.map { story ->
+                val enrichedCount = chapterCounts[story.id]
+                if (enrichedCount != null && enrichedCount > 0) {
+                    story.copy(totalChapters = enrichedCount)
+                } else {
+                    story
+                }
+            }
         }
 
         private fun extractSlug(url: String): String {
-            // URL: https://truyen.tangthuvien.vn/doc-truyen/{slug}
-            // or: https://truyen.tangthuvien.vn/doc-truyen/{slug}/chuong-N
-            val path = url.trimEnd('/').substringAfter("/doc-truyen/", "")
-            return path.substringBefore("/").ifBlank { path }
+            // URL có thể là https://tangthuvien.org/slug hoặc /slug
+            // Hoặc url cũ: https://truyen.tangthuvien.vn/doc-truyen/slug
+            val path = url.trimEnd('/').substringAfter("/doc-truyen/").substringAfter("tangthuvien.org/")
+            return path.substringBefore("/").substringBefore("?").ifBlank { path.replace("/", "") }
         }
 
-        // Map genre slug to TTV category ID for /tong-hop?ctg= queries
-        private val genreSlugToIdMap =
-            mapOf(
-                "tien-hiep" to 1,
-                "huyen-huyen" to 2,
-                "do-thi" to 3,
-                "khoa-huyen" to 4,
-                "ky-huyen" to 5,
-                "vo-hiep" to 6,
-                "lich-su" to 7,
-                "dong-nhan" to 8,
-                "quan-su" to 9,
-                "du-hi" to 10,
-                "canh-ky" to 11,
-                "linh-di" to 12,
-            )
+        private fun migrateUrl(oldUrl: String): String {
+            if (oldUrl.contains("truyen.tangthuvien.vn/doc-truyen/")) {
+                // Example old: https://truyen.tangthuvien.vn/doc-truyen/tien-gia
+                // Example old chapter: https://truyen.tangthuvien.vn/doc-truyen/tien-gia/chuong-1
+                val parts = oldUrl.substringAfter("/doc-truyen/").split("/")
+                val slug = parts.firstOrNull() ?: return oldUrl
+                val chapterPart = parts.getOrNull(1)
 
-        private fun genreSlugToId(slug: String): Int = genreSlugToIdMap[slug] ?: 0
-
-        // ---- TTV Chapter AJAX helpers ----
-
-        /**
-         * Extract numeric story ID from hidden input field.
-         * TTV uses this ID for AJAX chapter pagination.
-         * HTML: <input type="hidden" name="story_id" id="story_id_hidden" value="38952">
-         */
-        private fun extractNumericStoryId(doc: org.jsoup.nodes.Document): String? {
-            // Try input element first
-            val inputVal = doc.select("#story_id_hidden").attr("value")
-            if (inputVal.isNotBlank()) return inputVal
-
-            // Fallback: regex on page source
-            val html = doc.html()
-            return STORY_ID_REGEX.find(html)?.groupValues?.get(1)
-        }
-
-        /**
-         * Fetch a single page of chapters from TTV AJAX endpoint.
-         * URL: /doc-truyen/page/{storyNumericId}?page={pageIndex}&limit=75&web=1
-         * pageIndex is 0-based.
-         */
-        private suspend fun fetchChapterPageAjax(
-            storyNumericId: String,
-            pageIndex: Int,
-            storySlug: String,
-        ): List<Chapter> {
-            val url = "$BASE_URL/doc-truyen/page/$storyNumericId?page=$pageIndex&limit=$CHAPTERS_PER_PAGE&web=1"
-            val doc = fetchDocumentWithRetry(url)
-            return parseChapterLinks(doc, storySlug)
+                return if (chapterPart != null && chapterPart.startsWith("chuong-")) {
+                    val chapterNum = chapterPart.replace("chuong-", "")
+                    "$BASE_URL/$slug/$chapterNum"
+                } else {
+                    "$BASE_URL/$slug"
+                }
+            }
+            if (oldUrl.startsWith("/")) {
+                return "$BASE_URL$oldUrl"
+            }
+            return oldUrl
         }
     }

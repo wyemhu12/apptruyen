@@ -36,6 +36,12 @@ object TtsTextPreprocessor {
     // Fallback: dot between two letters (abc.xyz → abc xyz)
     private val MID_WORD_DOT_REGEX = Regex("(?<=[A-Za-zÀ-ỹ])\\.(?=[A-Za-zÀ-ỹ])")
 
+    // Remove quotation marks
+    private val QUOTES_REGEX = Regex("[\"“”]")
+
+    // Remove separator lines (3 or more of specific symbols)
+    private val SEPARATORS_REGEX = Regex("[-_+=*~]{3,}")
+
     init {
         val keys =
             ABBREVIATIONS.keys
@@ -63,6 +69,15 @@ object TtsTextPreprocessor {
 
         // Step 3: Remaining mid-word dots → space (abc.xyz → abc xyz)
         result = MID_WORD_DOT_REGEX.replace(result, " ")
+
+        // Step 4: Remove quotation marks
+        result = QUOTES_REGEX.replace(result, "")
+
+        // Step 5: Remove separator lines
+        result = SEPARATORS_REGEX.replace(result, " ")
+
+        // Step 6: Collapse multiple spaces and trim
+        result = result.replace(Regex(" {2,}"), " ").trim()
 
         return result
     }

@@ -7,10 +7,17 @@
 -keep,allowobfuscation,allowshrinking class kotlin.coroutines.Continuation
 -dontwarn kotlin.**
 
-# --- Room ---
--keep class * extends androidx.room.RoomDatabase
--keep @androidx.room.Entity class *
--keep @androidx.room.Dao class *
+# --- Room 3 ---
+-keep class * extends androidx.room3.RoomDatabase { *; }
+-keep @androidx.room3.Entity class *
+-keep @androidx.room3.Dao class *
+-keepclassmembers class * extends androidx.room3.RoomDatabase {
+    <init>();
+}
+-keep class * extends androidx.room3.RoomDatabaseConstructor {
+    <init>();
+    public *** initialize();
+}
 
 # --- Hilt / Dagger ---
 -dontwarn dagger.internal.codegen.**
@@ -38,8 +45,13 @@
 # --- DataStore / Protobuf ---
 -keep class * extends com.google.protobuf.GeneratedMessageLite { *; }
 
-# --- AndroidX Media (MediaSession) ---
--keep class androidx.media.** { *; }
+# --- AndroidX Media3 (MediaSessionService) ---
+-keepclassmembers class * extends androidx.media3.session.MediaSessionService {
+    <init>();
+}
+-keep class androidx.media3.session.MediaSessionService
+-keep class androidx.media3.session.MediaSession
+-keep class androidx.media3.common.MediaMetadata
 
 # --- Compose ---
 -dontwarn androidx.compose.**

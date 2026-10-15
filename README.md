@@ -92,7 +92,7 @@ Hệ thống tài liệu cho nhà phát triển được đặt trong thư mục
 
 Mọi đóng góp (Báo lỗi, Yêu cầu tính năng, hay Pull Request) đều luôn được chào đón! Vui lòng đọc kỹ [Hướng dẫn đóng góp (Contributing)](docs/contributing.md) trước khi tạo PR.
 
-Dự án này ứng dụng tự động hóa bằng AI Agent. Nếu bạn dùng AI Agent (như Cline, Cursor, Antigravity) để viết code, vui lòng tuân thủ các quy tắc trong [`.agent/rules/`](.agent/rules/).
+Dự án này ứng dụng tự động hóa bằng AI Agent. Nếu bạn dùng AI Agent (như Cline, Cursor, Antigravity) để viết code, vui lòng tuân thủ các quy tắc trong [`AGENTS.md`](AGENTS.md) và thư mục rules.
 
 ## 📄 Giấy phép
 

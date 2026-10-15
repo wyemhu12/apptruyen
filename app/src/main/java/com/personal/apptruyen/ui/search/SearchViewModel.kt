@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.personal.apptruyen.data.model.Genre
 import com.personal.apptruyen.data.model.Story
+import com.personal.apptruyen.data.repository.ISourceAuthRepository
 import com.personal.apptruyen.data.repository.IStoryRepository
 import com.personal.apptruyen.data.repository.SearchHistoryRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -39,6 +40,7 @@ class SearchViewModel
     constructor(
         private val repository: IStoryRepository,
         private val searchHistoryRepository: SearchHistoryRepository,
+        private val authRepository: ISourceAuthRepository,
     ) : ViewModel() {
 
         data class SearchState(
@@ -68,6 +70,14 @@ class SearchViewModel
             searchHistoryRepository
                 .getRecentSearches()
                 .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+        val loginRequiredSources: StateFlow<Set<String>> =
+            authRepository.loginRequiredSources
+                .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptySet())
+
+        fun dismissLoginPrompt(sourceId: String) {
+            authRepository.clearLoginRequired(sourceId)
+        }
 
         /** Autocomplete suggestions: filter recentSearches by current query (>= 2 chars) */
         val searchSuggestions: StateFlow<List<String>> =
@@ -221,8 +231,8 @@ class SearchViewModel
 
             if (hasKeyword) {
                 search()
-            } else if (hasGenre) {
-                genre?.let { browseByGenre(it, chapterFilter) }
+            } else if (hasGenre && genre != null) {
+                browseByGenre(genre, chapterFilter)
             } else if (!hasAnyFilter) {
                 // Không filter, không keyword → clear
                 if (_state.value.hasSearched) clearFilter()
@@ -298,12 +308,13 @@ class SearchViewModel
             return stories.filter { story ->
                 val matchesGenre =
                     genre == null ||
+                        story.genres.isEmpty() ||
+                        story.sourceId == "wikidich" ||
                         story.genres.any {
                             it.trim().equals(genre.name.trim(), ignoreCase = true)
                         }
-                val matchesChapters = story.totalChapters >= minChapters
+                val matchesChapters = minChapters == 0 || story.totalChapters == 0 || story.totalChapters >= minChapters
                 // Lọc completedOnly: cho qua truyện Full hoặc truyện chưa biết status
-                // (nhiều nguồn như TruyenCom không có status trong search HTML)
                 val matchesStatus =
                     !completedOnly ||
                         story.status.isBlank() ||

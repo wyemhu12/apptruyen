@@ -43,14 +43,11 @@ object TextFormatHelper {
         // Tránh tạo ra nhiều \n liên tiếp
         result = result.replace(Regex("(\"[^\"]+\")"), "\n$1\n")
 
-        // 7. Gạch đầu dòng ở dòng riêng (dấu gạch nối tiếp theo là khoảng trắng rồi chữ)
-        result = result.replace(Regex("(?<!\\n)\\s*([\\-–—]\\s*[\\p{L}])"), "\n$1")
-
-        // 8. Các câu kết thúc bằng ! hoặc ? cũng phải nằm ở dòng riêng (câu thoại)
+        // 7. Các câu kết thúc bằng ! hoặc ? cũng phải nằm ở dòng riêng (câu thoại)
         // Tức là sau ! hoặc ? thì xuống dòng. Nhưng không ngắt dòng nếu nằm trong ngoặc kép.
-        val linesForStep8 = result.split("\n")
+        val linesForStep8 = result.split(Regex("\n\\s*\n"))
         result =
-            linesForStep8.joinToString("\n") { line ->
+            linesForStep8.joinToString("\n\n") { line ->
                 val trimmed = line.trim()
                 if (trimmed.startsWith("\"")) {
                     line
@@ -60,7 +57,7 @@ object TextFormatHelper {
             }
 
         // 9. Giới hạn đoạn văn không quá 5 câu (câu kết thúc bằng . hoặc ...)
-        val paragraphs = result.split("\n")
+        val paragraphs = result.split(Regex("\n\\s*\n"))
         val finalParagraphs = mutableListOf<String>()
 
         for (p in paragraphs) {

@@ -1,6 +1,6 @@
 package com.personal.apptruyen.data.local
 
-import androidx.room.*
+import androidx.room3.*
 import com.personal.apptruyen.data.local.entity.ChapterEntity
 import com.personal.apptruyen.data.local.entity.DownloadStats
 import kotlinx.coroutines.flow.Flow

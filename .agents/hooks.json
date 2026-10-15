@@ -1,0 +1,29 @@
+{
+  "code-freeze-guard": {
+    "enabled": true,
+    "PreToolUse": [
+      {
+        "matcher": "write_to_file|replace_file_content|multi_replace_file_content|run_command",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node scripts/code-freeze-guard.js --event pre",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "write_to_file|replace_file_content|multi_replace_file_content",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node scripts/code-freeze-guard.js --event post",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -1,150 +1,135 @@
 # Hướng dẫn Scraping
 
-> **Cập nhật lần cuối:** 2026-05-30 08:46
+> **Cập nhật lần cuối:** 2026-10-14 19:40
 
-## TruyenCom (truyencom.com)
+## Nguồn hoạt động hiện tại
+
+1. **Tàng Thư Viện (`tangthuvien.org`)** — sourceId: `tangthuvien`
+2. **SsTruyện (`sstruyen.pics`)** — sourceId: `sstruyen`
+3. **Wikidich (`wikicv.org`)** — sourceId: `wikidich`
+
+---
+
+## 1. Wikidich (`wikicv.org`)
+
+Wikidich là nguồn truyện convert phong phú. Sử dụng cookie session `express.sid` để xác thực người dùng.
 
 ### URL Patterns
 
 | Chức năng | URL | Ví dụ |
 | --- | --- | --- |
-| Trang chủ | `https://truyencom.com` | — |
-| Tìm kiếm | `/tim-kiem?tukhoa={keyword}` | `/tim-kiem?tukhoa=pham+nhan+tu+tien` |
-| Chi tiết truyện | `/{slug}.{id}/` | `/pham-nhan-tu-tien.14/` |
-| Đọc chương | `/{slug}/chuong-{N}.html` | `/pham-nhan-tu-tien/chuong-1.html` |
-| Truyện full | `/truyen-full/` | `/truyen-full/trang-2/` (phân trang) |
-| Thể loại (full) | `/truyen-{genre}/full/` | `/truyen-tien-hiep/full/trang-3/` |
-| **Thể loại sort API** | `/api/list/{catId}/{sort}/{page}/{limit}` | `/api/list/39/new/1/25` |
-| Tác giả | `/tac-gia/{slug}/` | `/tac-gia/vong-ngu/` |
-| Genre links | `a[href*=truyen-]` on homepage | 42 thể loại trong nav menu |
+| Trang chủ | `https://wikicv.org` | — |
+| Tìm kiếm | `/tim-kiem?qs=1&q={keyword}` | `/tim-kiem?qs=1&q=tien+hiep` |
+| Chi tiết truyện | `/truyen/{slug}` | `/truyen/de-ba` |
+| Đọc chương | `/truyen/{slug}/{chapterSlug}` | `/truyen/de-ba/chuong-1` |
+| Danh sách chương AJAX | `/book/index?bookId={id}&start={start}&size=99&signKey={key}&sign={sign}` | AJAX phân trang 99 chương/lần |
+| Thể loại | `/tim-kiem?qs=1&{genre/tag/age}&status={status}&start={start}` | `/tim-kiem?qs=1&tag=5794f03ed7ced228f44191de&status=5794f03dd7ced228f4419191` |
+| Hoàn thành | `/tim-kiem?qs=1&status=5794f03dd7ced228f4419191&start={start}` | Phân trang theo `start = (page - 1) * 20` |
+
+### Chữ ký AJAX danh sách chương
+- Trang chi tiết truyện nhúng script chứa `bookId`, `signKey`.
+- Thuật toán ký:
+  ```kotlin
+  cut = (start + size) % signKey.length
+  text = (signKey + start + size)
+  fuzzy = text.substring(cut) + text.substring(0, cut)
+  sign = SHA256(fuzzy).lowercase()
+  ```
+- Phân trang: Đọc selector `ul.pagination li a[data-action="loadBookIndex"][data-start=...]` để xác định trang kế tiếp.
+- **Số chương trong danh sách**: Thẻ `.book-item` trên trang tìm kiếm không chứa số chương; `WikidichScraper` trích xuất số chương từ link `"Mới nhất"` (`.cover-info a[href*='/truyen/']`) trên trang chi tiết qua `extractTotalChaptersFromDetail()` và làm giàu song song (`enrichWithChapterCounts()`, batch 5, timeout 7s).
 
 ### CSS Selectors
-
-#### Trang tìm kiếm
-
 ```css
-Kết quả: h3.truyen-title a
-         .list-truyen .truyen-title a
-         .col-truyen-main .truyen-title a
+Tìm kiếm:      .book-item (.info-col a.tooltipped, h5.book-title)
+Chi tiết:
+  Tiêu đề:     .cover-info h2, .cover-info h1, .book-info h2
+  Tác giả:     .cover-info a[href*='/tac-gia/']
+  Thể loại:    .cover-info a[href*='/tim-kiem?'], .book-desc a[href*='/tim-kiem?']
+  Chương mới:  .cover-info a[href*='/truyen/'] (Mới nhất: Chương X)
+  Ảnh bìa:     .cover-info img, .book-info img
+  Mô tả:       .book-desc-detail, .book-desc
+Đọc chương:
+  Nội dung:    #bookContentBody, .book-content, #chapter-content
 ```
 
-#### Trang chi tiết
+### Lọc Watermark
+Nội dung chương thường kèm watermark được lọc bằng regex:
+`【❁.*\(Wikidich\).*❁】` và text `(Wikidich)`.
 
-```css
-Tiêu đề:    h1, .title, h3.title
-Tác giả:    a[href*=tac-gia]
-Thể loại:   .info-holder a[href*=truyen-]   /* SCOPED — tránh lấy nhầm nav menu */
-Mô tả:      .desc-text, .desc, div[itemprop=description]
-Ảnh bìa:    img.book, .book img, .info-holder img, div[itemprop=image] img
-Chương:      a[href*=chuong-]
-Phân trang:  a[href*=trang-] (Last » link → trang-N, 50 chương/trang)
-```
-
-#### Trang đọc chương
-
-```css
-Nội dung:   #chapter-c
-             #chapter-content
-             .chapter-c
-             .chapter-content
-             #content
-             .truyen-content
-```
-
-> ⚠️ **Lưu ý**: Nội dung chương được load qua JavaScript.
-> Đã implement `WebViewContentLoader` làm fallback khi Jsoup trả về rỗng.
-> Flow: OkHttp+Jsoup (fast) → nếu < 50 chars → WebView headless (JS render).
-
-### JSON API (Server-side Sort)
-
-> ⚠️ **Quan trọng**: Trang thể loại full (`/truyen-{genre}/full/`) load nội dung 3 tab (Mới/Hot/Chọn lọc) qua **AJAX**, không phải HTML tĩnh. HTML tĩnh chỉ chứa danh sách HOT.
-
-| Endpoint | Response |
-| --- | --- |
-| `/api/list/{categoryID}/new/{page}/25` | Truyện mới nhất (JSON) |
-| `/api/list/{categoryID}/hot/{page}/25` | Truyện hot (JSON) |
-| `/api/list/{categoryID}/selective/{page}/25` | Truyện chọn lọc (JSON) |
-
-- `categoryID` extract từ `var categoryID=X;` trong inline script tag trên genre page
-- Response: `{ "items": [{storyID, title, alias, author, chapters, ...}], "total": "N" }`
-- `alias` = slug dùng để tạo URL: `/{alias}.{storyID}/`
+### Xác thực tài khoản (Source Authentication)
+- Cookie session: `express.sid`.
+- Đăng nhập: WebView hướng dẫn người dùng tới SSO forum Dịch Tiếng Hoa (`forum.dichtienghoa.com/dth/auth`), Referer: `https://wikicv.org/`.
+- Fallback: Dán trực tiếp chuỗi cookie từ trình duyệt PC (`express.sid=...`).
+- Quản lý phiên: `SourceAuthManager`, cookie lưu trữ host-only qua `CookieStore`.
 
 ---
 
-## ~~MeTruyenChu (metruyenchu.com.vn)~~ — ĐÃ NGỪNG HOẠT ĐỘNG (2026-05-30)
+## 2. Tàng Thư Viện (`tangthuvien.org`)
+
+Trang web Tàng Thư Viện mới sử dụng React/Next.js (App Router). Dữ liệu được Server-Side Rendering nên vẫn có thể dùng Jsoup để parse.
+
+**Cấu trúc URL:**
+- Chi tiết truyện: `https://tangthuvien.org/{slug}`
+- Đọc chương: `https://tangthuvien.org/{slug}/{số_thứ_tự_chương}`
+- Tìm kiếm/Lọc: `https://tangthuvien.org/truyen?keyword={keyword}&status=COMPLETED&genre={genre}`
+
+**Lưu ý khi Scraping:**
+- Danh sách chương (chapter list) được fetch ngầm qua API của Next.js khi click UI.
+- Giải pháp: Parse biến `totalChapters` từ thẻ báo số lượng chương (`<span>241<!-- --> Chương</span>`), sau đó tự động khởi tạo danh sách URL chương: `/{slug}/1`, `/{slug}/2` với tên mặc định "Chương 1", "Chương 2".
+- Tên gốc của chương được parse khi người dùng bấm vào xem trang chi tiết chương (`h1, h2, div.font-semibold`). Title được extract và tự động cập nhật vào DB qua `getChapterContentWithTitle()`.
+- Hỗ trợ fallback đổi URL cũ (`truyen.tangthuvien.vn/doc-truyen/{slug}`) thành URL mới trong `StoryDetail` và `ChapterContent`.
+- **Chú ý prefix `#`**: Trang web TTV hiển thị title chương dạng `#8 Chương 8: Tên chương`. Regex `TITLE_HASH_PREFIX = ^#\d+\s+` được dùng để strip prefix này khỏi cả title và paragraph content.
+- **Số chương trong danh sách**: Hàm `enrichWithChapterCounts()` fetch detail page song song (batch 5, timeout 7s, max 10 stories) để bổ sung.
+
+---
+
+## 3. SsTruyện (`sstruyen.pics`)
+
+Nguồn truyện hỗ trợ đọc trực tuyến, tải offline tốc độ cao qua REST API, tự động tương thích ngược dữ liệu từ domain cũ (`sstruyen.net`).
+
+### URL Patterns
+- **Trang chủ**: `https://sstruyen.pics`
+- **Tìm kiếm**: `https://sstruyen.pics/tim-kiem?keyword={keyword}`
+- **Bộ lọc**: `https://sstruyen.pics/danh-sach/bo-loc?type={type}&status={status}&sort={sort}&genre={genre}&page={page}`
+  - `status=completed`: Lọc truyện đã hoàn thành (100% truyện trả về chuẩn Đã hoàn thành).
+  - `sort=updatedAt`: Luôn sắp xếp truyện mới cập nhật nhất lên đầu.
+  - `type`: `0` (<100c), `1` (100-500c), `2` (500-1000c), `3` (>1000c).
+- **API thể loại**: `GET https://api.sstruyen.pics/genres` (trả về JSON Array 93 thể loại sạch sẽ, có fallback HTML).
+- **Chi tiết truyện**: `https://sstruyen.pics/truyen/{slug}`
+- **API chi tiết truyện**: `GET https://api.sstruyen.pics/novels/{slug}` (trả về JSON chứa `id`, `chapterCount`, `coverUrl` để cache `novelId` và ảnh bìa dự phòng).
+- **API danh sách chương**: `GET https://api.sstruyen.pics/novels/{novelId}/chapters?page={page}&limit=50&sort=asc`
+- **Đọc chương mới**: `https://sstruyen.pics/doc-truyen/{novelSlug}-{chapterSlug}-{chapterId}`
+- **Ảnh bìa (CDN)**: `https://file.sstruyen.pics/files/covers/{slug}.webp`
+
+### CSS Selectors & Trích xuất
+- **Danh sách item**: `a[itemprop=hasPart]`, fallback `div.home-truyendecu, div.each_truyen, div.item`
+- **Ảnh bìa (`extractImageSrc`)**: Ưu tiên `data-src`, `data-lazy-src`, `data-original` trước `src` và loại bỏ placeholder lazy-load `data:image/png;base64,...` hoặc `/imgs/logo.webp`. Chuẩn hóa đường dẫn `/covers/...` về CDN `https://file.sstruyen.pics/files/covers/...`.
+- **Tiêu đề truyện**: `h1`, `p[itemprop=name]`, `.title`
+- **Tác giả**: `div[itemprop=author] span[itemprop=name]`, `a[href*=/tac-gia/]`
+- **Số chương khi tìm kiếm/danh sách**: `span[itemprop=dateModified]`, trích xuất regex `(?:Chương|Hồi|C)\s*(\d+)` hoặc `(\d+)\s*chương`.
+- **Trạng thái**: `span[itemprop=bookFormat]` ("Đã hoàn thành" / "Đang phát hành")
+- **Thể loại**: REST API `api.sstruyen.pics/genres`, fallback `a[href*=/the-loai/]`
+- **Mô tả**: `div[itemprop=description]`, `.desc-text`
+- **Nội dung chương mới**: `div.prose`, `div.wrapper.prose` (xử lý đồng thời cả text node ngăn cách bằng `<br><br>` lẫn các thẻ `<p>`, loại bỏ khối footer `div.text-center` chứa câu thông báo lỗi mẫu), ngắt đoạn `\n\n`.
+- **Tương thích ngược chương cũ (`sstruyen.net`)**: 9 selectors kế thừa (`#chapter-c, .chapter-c, #chapter-content, .chapter-content, #content, .content, div.text-justify, .reading-content, .truyen-content`) và `cleanHtml` xử lý `<br>`. Bảo toàn 100% tiêu đề và nội dung chương đã tải offline.
+
+---
+
+## Nguồn đã gỡ bỏ (Lưu trữ tương thích ngược)
 
 > [!CAUTION]
-> metruyenchu.com và metruyenchu.com.vn đã ngừng hoạt động.
-> `MeTruyenChuScraper.kt` đã bị xóa khỏi codebase.
-> Truyện đã tải trước đó vẫn đọc offline bình thường (sourceId="metruyenchu" giữ nguyên trong DB).
+> Các nguồn sau đã ngừng hỗ trợ cào trực tuyến. Các file scraper đã được xóa khỏi codebase.
+> Toàn bộ truyện/chương đã tải trước đó trong Room Database vẫn được bảo toàn và đọc offline bình thường.
 
-<details>
-<summary>Thông tin cũ (lưu trữ)</summary>
+### ~~TruyenCom (truyencom.com)~~ — ĐÃ GỠ BỎ (2026-10-13)
+- URL gốc: `https://truyencom.com`
+- `TruyenComScraper.kt` đã bị xóa.
 
-### URL Patterns (cũ)
+### ~~TruyenFull (truyenfull.today)~~ — ĐÃ GỠ BỎ (2026-10-13)
+- URL gốc: `https://truyenfull.today`
+- `TruyenFullScraper.kt` đã bị xóa.
 
-| Chức năng | URL | Ví dụ |
-| --- | --- | --- |
-| Trang chủ | `https://metruyenchu.com.vn` | — |
-| Tìm kiếm | `/tim-kiem?tukhoa={keyword}` | `/tim-kiem?tukhoa=nghich+thien` |
-| Chi tiết truyện | `/{slug}` | `/nghich-thien-ta-than` |
-| Đọc chương | `/{slug}/chuong-{N}-{hashId}` | `/nghich-thien-ta-than/chuong-1-5IgkcQhl5YDW` |
-| Truyện full | `/danh-sach/truyen-full` | `/danh-sach/truyen-full?page=2` |
-| Thể loại | `/the-loai/{slug}` | `/the-loai/tien-hiep` |
-
-</details>
-
----
-
-## TruyenFull (truyenfull.today)
-
-> Cùng engine 8cache với TruyenCom. 46 thể loại. Server-side rendered — không cần WebView fallback.
-
-### URL Patterns
-
-| Chức năng | URL | Ví dụ |
-| --- | --- | --- |
-| Trang chủ | `https://truyenfull.today` | — |
-| Tìm kiếm | `/tim-kiem/?tukhoa={keyword}` | `/tim-kiem/?tukhoa=pham+nhan` |
-| Chi tiết truyện | `/{slug}/` | `/pham-nhan-tu-tien/` |
-| Đọc chương | `/{slug}/chuong-{N}/` | `/pham-nhan-tu-tien/chuong-1/` |
-| Phân trang chapter | `/{slug}/trang-{N}/#list-chapter` | `/pham-nhan-tu-tien/trang-2/#list-chapter` (50 chương/trang) |
-| Thể loại hoàn thành | `/the-loai/{genre}/hoan/` | `/the-loai/tien-hiep/hoan/` |
-| Phân trang thể loại | `/the-loai/{genre}/hoan/trang-{N}/` | `/the-loai/tien-hiep/hoan/trang-2/` |
-| Truyện full | `/danh-sach/truyen-full/` | `/danh-sach/truyen-full/` |
-
-### CSS Selectors
-
-#### Danh sách truyện (search / browse)
-
-```css
-Kết quả: .row[itemscope] h3.truyen-title a
-```
-
-#### Trang chi tiết
-
-```css
-Tiêu đề:    h3.title[itemprop=name]
-Tác giả:    a[itemprop=author]
-Thể loại:   a[itemprop=genre]
-Ảnh bìa:    .book img[itemprop=image]
-Mô tả:      .desc-text[itemprop=description]
-```
-
-#### Danh sách chương
-
-```css
-Chương:      #list-chapter .list-chapter li a[href*=chuong-]
-Phân trang:  ul.pagination.pagination-sm a[href*=trang-]
-```
-
-#### Trang đọc chương
-
-```css
-Nội dung:   #chapter-c[itemprop=articleBody]
-```
-
-> ✅ **Lưu ý**: Nội dung chương server-side rendered, không cần WebView fallback.
+### ~~MeTruyenChu (metruyenchu.com.vn)~~ — ĐÃ NGỪNG HOẠT ĐỘNG (2026-05-30)
 
 ---
 
@@ -157,7 +142,7 @@ Nội dung:   #chapter-c[itemprop=articleBody]
 
 ## WebViewContentLoader
 
-- Allowed domains: `truyencom.com`, `tangthuvien.vn`, `sstruyen.net`, `truyenfull.today`
+- Allowed domains: `wikicv.org`, `wikicv.net`, `tangthuvien.org`, `sstruyen.vn`
 - Timeout: 15s
 - JS selectors: `#chapter-c`, `#chapter-content`, `.chapter-c`, `.chapter-content`, `#content`, `.truyen-content`, `#js-read__content`, `div.text-justify`
 - Block images (`blockNetworkImage = true`) để tải nhanh hơn
@@ -167,6 +152,8 @@ Nội dung:   #chapter-c[itemprop=articleBody]
 
 | Lỗi | Xử lý |
 | --- | --- |
+| `LoginRequiredException` | Nguồn yêu cầu đăng nhập (Wikidich), hiển thị banner tiếng Việt |
+| `CircuitOpenException` | Nguồn tạm đóng do lỗi liên tiếp, phục hồi sau cooldown |
 | Timeout | Retry 3 lần, tăng timeout |
 | 404 | Bỏ qua chapter, log warning |
 | HTML rỗng | Thử fallback selectors → WebView |

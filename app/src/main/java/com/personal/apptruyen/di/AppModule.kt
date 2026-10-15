@@ -4,14 +4,21 @@ import android.app.NotificationManager
 import android.content.Context
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
-import androidx.room.Room
+import androidx.room3.Room
+import androidx.room3.withWriteTransaction
+import androidx.sqlite.driver.bundled.BundledSQLiteDriver
 import com.personal.apptruyen.data.local.AppDatabase
+import com.personal.apptruyen.data.local.AppDatabase_Impl
 import com.personal.apptruyen.data.local.ChapterDao
+import com.personal.apptruyen.data.local.DatabaseTransactionRunner
 import com.personal.apptruyen.data.local.ReadingProgressDao
 import com.personal.apptruyen.data.local.ReadingStatsDao
 import com.personal.apptruyen.data.local.SearchHistoryDao
 import com.personal.apptruyen.data.local.StoryDao
 import com.personal.apptruyen.data.local.settingsDataStore
+import com.personal.apptruyen.data.remote.cookie.AndroidCookieStore
+import com.personal.apptruyen.data.remote.cookie.CookieStore
+import com.personal.apptruyen.data.remote.cookie.WebViewCookieHandler
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
@@ -35,31 +42,24 @@ object AppModule {
 
     @Provides
     @Singleton
-    fun provideOkHttpClient(): OkHttpClient {
-        val cookieJar =
-            object : okhttp3.CookieJar {
-                private val store = java.util.concurrent.ConcurrentHashMap<String, List<okhttp3.Cookie>>()
+    fun provideCookieStore(androidCookieStore: AndroidCookieStore): CookieStore = androidCookieStore
 
-                override fun saveFromResponse(
-                    url: okhttp3.HttpUrl,
-                    cookies: List<okhttp3.Cookie>,
-                ) {
-                    store[url.host] = cookies
-                }
+    @Provides
+    @Singleton
+    fun provideWebViewCookieHandler(cookieStore: CookieStore): WebViewCookieHandler = WebViewCookieHandler(cookieStore)
 
-                override fun loadForRequest(url: okhttp3.HttpUrl): List<okhttp3.Cookie> = store[url.host] ?: emptyList()
-            }
-
-        return OkHttpClient
+    @Provides
+    @Singleton
+    fun provideOkHttpClient(cookieHandler: WebViewCookieHandler): OkHttpClient =
+        OkHttpClient
             .Builder()
-            .cookieJar(cookieJar)
+            .cookieJar(cookieHandler)
             .connectTimeout(15, TimeUnit.SECONDS)
             .readTimeout(30, TimeUnit.SECONDS)
             .writeTimeout(15, TimeUnit.SECONDS)
             .connectionPool(okhttp3.ConnectionPool(5, 30, TimeUnit.SECONDS))
             .followRedirects(true)
             .build()
-    }
 
     @Provides
     @Singleton
@@ -67,11 +67,11 @@ object AppModule {
         @ApplicationContext context: Context,
     ): AppDatabase =
         Room
-            .databaseBuilder(
-                context,
-                AppDatabase::class.java,
-                "apptruyen.db",
-            )
+            .databaseBuilder<AppDatabase>(
+                context = context,
+                name = "apptruyen.db",
+                factory = { AppDatabase_Impl() },
+            ).setDriver(BundledSQLiteDriver())
             // Allow destructive migration from legacy versions (v1-v4)
             .fallbackToDestructiveMigrationFrom(true, 1, 2, 3, 4)
             .addMigrations(
@@ -80,6 +80,13 @@ object AppModule {
                 AppDatabase.MIGRATION_7_8,
                 AppDatabase.MIGRATION_8_9,
             ).build()
+
+    @Provides
+    @Singleton
+    fun provideDatabaseTransactionRunner(db: AppDatabase): DatabaseTransactionRunner =
+        object : DatabaseTransactionRunner {
+            override suspend fun <R> withWriteTransaction(block: suspend () -> R): R = db.withWriteTransaction { block() }
+        }
 
     @Provides
     fun provideStoryDao(db: AppDatabase): StoryDao = db.storyDao()

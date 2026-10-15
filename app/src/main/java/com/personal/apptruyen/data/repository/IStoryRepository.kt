@@ -1,6 +1,7 @@
 package com.personal.apptruyen.data.repository
 
 import com.personal.apptruyen.data.model.Chapter
+import com.personal.apptruyen.data.model.ChapterContentResult
 import com.personal.apptruyen.data.model.Genre
 import com.personal.apptruyen.data.model.Story
 import kotlinx.coroutines.flow.Flow
@@ -66,7 +67,7 @@ interface IStoryRepository {
         storyId: String,
         chapterNumber: Int,
         chapterUrl: String,
-    ): String
+    ): ChapterContentResult
 
     // ── Library ──
     suspend fun addToLibrary(storyId: String)

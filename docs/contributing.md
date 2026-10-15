@@ -1,6 +1,6 @@
 # Hướng dẫn đóng góp (cho AI Agent & Developer)
 
-> **Cập nhật lần cuối:** 2026-02-11
+> **Cập nhật lần cuối:** 2026-10-11
 
 ## Coding Standards
 
@@ -24,6 +24,7 @@
 
 ## Quy trình thêm tính năng mới
 
+0. Lập kế hoạch: `@planner` soạn plan trong `docs/plans/`, Lead Reviewer (Claude CLI / `@reviewer`) duyệt đến khi có `[PLAN_APPROVED]` (xem `.agents/rules/05-plan-review.md`). Code Freeze Guard khóa `app/` cho đến lúc đó.
 1. Cập nhật `docs/progress.md` — thêm task vào "Chưa làm"
 2. Tạo/sửa data models nếu cần
 3. Cập nhật Room entities + DAOs + migration nếu thay đổi schema
@@ -32,7 +33,9 @@
 6. Cập nhật `AppNavigation.kt` nếu thêm route mới
 7. Cập nhật `docs/architecture.md` nếu thay đổi cấu trúc
 8. Cập nhật `docs/changelog.md`
-9. Đánh dấu task là "Hoàn thành" trong `docs/progress.md`
+9. Đánh dấu task là "Hoàn thành" trong `docs/progress.md`, đổi plan sang `Trạng thái: Completed`
+
+Chi tiết coding standards đầy đủ: `.agents/rules/01-coding.md`, quality gates: `.agents/rules/02-quality.md`.
 
 ## Quy tắc đặt tên
 
@@ -46,10 +49,11 @@
 
 ## Testing
 
-- Unit tests: `app/src/test/` — test Scraper, Repository, TtsManager
+- Unit tests: `app/src/test/` — test Scraper, Repository, TtsManager, ViewModel (JUnit 5 + MockK + kotlinx-coroutines-test + MockWebServer)
 - Instrumented tests: `app/src/androidTest/` — test Room, UI
-- Test commands:
-  ```bash
-  ./gradlew testDebugUnitTest
-  ./gradlew connectedDebugAndroidTest
+- Test commands (PowerShell):
+  ```powershell
+  .\gradlew.bat testDebugUnitTest
+  .\gradlew.bat connectedDebugAndroidTest
   ```
+- Bug fix: chạy workflow `/post-fix` và ghi bài học vào `docs/lessons-learned.md`

@@ -8,12 +8,18 @@ import com.personal.apptruyen.data.local.SettingsKeys
 import com.personal.apptruyen.data.local.StoryDao
 import com.personal.apptruyen.data.local.entity.ChapterEntity
 import com.personal.apptruyen.data.local.entity.StoryEntity
+import com.personal.apptruyen.data.local.migrateWikidichEnabledSourcesIfNeeded
 import com.personal.apptruyen.data.model.Chapter
+import com.personal.apptruyen.data.model.ChapterContentResult
 import com.personal.apptruyen.data.model.Genre
 import com.personal.apptruyen.data.model.Story
 import com.personal.apptruyen.data.remote.ScraperCircuitBreaker
+import com.personal.apptruyen.data.remote.ScraperException
 import com.personal.apptruyen.data.remote.StorySource
+import com.personal.apptruyen.data.remote.matchesUrl
+import com.personal.apptruyen.data.repository.ISourceAuthRepository
 import com.personal.apptruyen.di.ApplicationScope
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -41,9 +47,11 @@ class StoryRepository
         @ApplicationScope private val appScope: CoroutineScope,
         private val dataStore: DataStore<Preferences>,
         private val circuitBreaker: ScraperCircuitBreaker,
+        private val authRepository: ISourceAuthRepository,
     ) : IStoryRepository {
-        // ---- Genre cache (in-memory, 1-hour TTL) ----
+        // ---- Genre cache (in-memory, 1-hour TTL, keyed by active source IDs) ----
         private var cachedGenres: List<Genre>? = null
+        private var cachedGenreSourceIds: Set<String>? = null
         private var cachedGenresTimestamp: Long = 0L
         private val genreCacheTtlMs = 60 * 60 * 1000L // 1 hour
 
@@ -61,6 +69,7 @@ class StoryRepository
          * Nếu chưa có config, mặc định bật tất cả.
          */
         private suspend fun activeSources(): Set<@JvmSuppressWildcards StorySource> {
+            dataStore.migrateWikidichEnabledSourcesIfNeeded()
             val enabledIds =
                 try {
                     dataStore.data
@@ -79,8 +88,8 @@ class StoryRepository
          * Throws if no source matches — prevents fetching from wrong source.
          */
         private fun sourceFor(url: String): StorySource =
-            sources.firstOrNull { url.contains(it.baseUrl.removePrefix("https://")) }
-                ?: throw IllegalArgumentException("Không tìm được nguồn phù hợp cho URL: $url")
+            sources.firstOrNull { it.matchesUrl(url) }
+                ?: throw ScraperException.ParseException("Nguồn truyện này không còn hoạt động hoặc không được hỗ trợ", url)
 
         /**
          * Smart dedup: cùng truyện từ nhiều nguồn (slug trùng) → giữ bản có nhiều chương nhất.
@@ -100,11 +109,21 @@ class StoryRepository
          * Mỗi logical page load [pagesPerBatch] pages thực từ mỗi source song song.
          * Ví dụ: page=1 → load source pages 1,2,3. page=2 → load source pages 4,5,6.
          */
+        private fun timeoutFor(source: StorySource): Long = if (source.sourceId == "wikidich") 25_000L else perSourceTimeoutMs
+
+        private fun sourcePagesFor(
+            source: StorySource,
+            logicalPage: Int,
+        ): Iterable<Int> {
+            if (source.sourceId == "wikidich") {
+                return listOf(logicalPage)
+            }
+            val startPage = (logicalPage - 1) * pagesPerBatch + 1
+            return startPage until (startPage + pagesPerBatch)
+        }
+
         override suspend fun getCompletedStories(page: Int): List<Story> =
             supervisorScope {
-                val startPage = (page - 1) * pagesPerBatch + 1
-                val pageRange = startPage until (startPage + pagesPerBatch)
-
                 activeSources()
                     .filter {
                         // Skip sources with open circuit breaker
@@ -113,27 +132,45 @@ class StoryRepository
                     .map { source ->
                         async {
                             try {
-                                withTimeoutOrNull(perSourceTimeoutMs) {
-                                    // Fetch multiple pages from this source in parallel
+                                val pageRange = sourcePagesFor(source, page)
+                                val timeoutMs = timeoutFor(source)
+                                withTimeoutOrNull(timeoutMs + 5_000L) {
+                                    // Fetch pages from this source in parallel
                                     val pages =
                                         pageRange.map { p ->
                                             async {
                                                 try {
-                                                    source.getCompletedStories(p)
-                                                } catch (_: Exception) {
+                                                    withTimeoutOrNull(timeoutMs) {
+                                                        source.getCompletedStories(p)
+                                                    } ?: emptyList()
+                                                } catch (e: Exception) {
+                                                    if (e is CancellationException) throw e
+                                                    if (e is ScraperException.LoginRequiredException) throw e
                                                     emptyList()
                                                 }
                                             }
                                         }
                                     pages.awaitAll().flatten()
-                                }?.also { circuitBreaker.recordSuccess(source.sourceId) } ?: run {
+                                }?.also {
+                                    Log.d("StoryRepo", "${source.sourceName} completedStories returned ${it.size} results")
+                                    circuitBreaker.recordSuccess(source.sourceId)
+                                    if (it.isNotEmpty()) {
+                                        authRepository.clearLoginRequired(source.sourceId)
+                                    }
+                                } ?: run {
                                     Log.d("StoryRepo", "${source.sourceName} completedStories timeout")
                                     circuitBreaker.recordFailure(source.sourceId)
                                     emptyList()
                                 }
                             } catch (e: Exception) {
-                                Log.d("StoryRepo", "${source.sourceName} completedStories failed", e)
-                                circuitBreaker.recordFailure(source.sourceId)
+                                if (e is CancellationException) throw e
+                                if (e is ScraperException.LoginRequiredException) {
+                                    Log.w("StoryRepo", "${source.sourceName} completedStories requires login", e)
+                                    authRepository.markLoginRequired(source.sourceId)
+                                } else {
+                                    Log.d("StoryRepo", "${source.sourceName} completedStories failed", e)
+                                    circuitBreaker.recordFailure(source.sourceId)
+                                }
                                 emptyList()
                             }
                         }
@@ -158,37 +195,50 @@ class StoryRepository
             completedOnly: Boolean,
         ): List<Story> =
             supervisorScope {
-                val startPage = (page - 1) * pagesPerBatch + 1
-                val pageRange = startPage until (startPage + pagesPerBatch)
-
                 val allResults =
                     activeSources()
                         .map { source ->
                             async {
                                 try {
-                                    withTimeoutOrNull(perSourceTimeoutMs) {
+                                    val pageRange = sourcePagesFor(source, page)
+                                    val timeoutMs = timeoutFor(source)
+                                    withTimeoutOrNull(timeoutMs + 5_000L) {
                                         val pages =
                                             pageRange.map { p ->
                                                 async {
                                                     try {
                                                         // Forward completedOnly cho từng scraper — mỗi nguồn xử lý khác nhau:
-                                                        // TruyenCom: /truyen-{slug}/ vs /truyen-{slug}/full/
                                                         // TTV: bỏ/thêm &fns=ht
                                                         // SST: bỏ/thêm ?loc=hoan-thanh
-                                                        // TruyenFull: /the-loai/{slug}/ vs /the-loai/{slug}/hoan/
-                                                        source.getStoriesByGenre(genreSlug, p, 0, completedOnly)
-                                                    } catch (_: Exception) {
+                                                        // Wikidich: /tim-kiem?... (kèm session nếu có)
+                                                        withTimeoutOrNull(timeoutMs) {
+                                                            source.getStoriesByGenre(genreSlug, p, 0, completedOnly)
+                                                        } ?: emptyList()
+                                                    } catch (e: Exception) {
+                                                        if (e is CancellationException) throw e
+                                                        if (e is ScraperException.LoginRequiredException) throw e
                                                         emptyList()
                                                     }
                                                 }
                                             }
                                         pages.awaitAll().flatten()
+                                    }?.also {
+                                        Log.d("StoryRepo", "${source.sourceName} getStoriesByGenre($genreSlug) returned ${it.size} results")
+                                        if (it.isNotEmpty()) {
+                                            authRepository.clearLoginRequired(source.sourceId)
+                                        }
                                     } ?: run {
                                         Log.d("StoryRepo", "${source.sourceName} getStoriesByGenre timeout")
                                         emptyList()
                                     }
                                 } catch (e: Exception) {
-                                    Log.d("StoryRepo", "${source.sourceName} getStoriesByGenre failed", e)
+                                    if (e is CancellationException) throw e
+                                    if (e is ScraperException.LoginRequiredException) {
+                                        Log.w("StoryRepo", "${source.sourceName} getStoriesByGenre requires login", e)
+                                        authRepository.markLoginRequired(source.sourceId)
+                                    } else {
+                                        Log.d("StoryRepo", "${source.sourceName} getStoriesByGenre failed", e)
+                                    }
                                     emptyList()
                                 }
                             }
@@ -208,37 +258,48 @@ class StoryRepository
         // ---- Genre list (merged, deduplicated by slug) ----
 
         override suspend fun getGenreList(): List<Genre> {
+            val activeSrcs = activeSources()
+            if (activeSrcs.isEmpty()) return emptyList()
+            val activeIds = activeSrcs.map { it.sourceId }.toSet()
             val now = System.currentTimeMillis()
-            cachedGenres?.takeIf { now - cachedGenresTimestamp < genreCacheTtlMs }?.let { return it }
+            cachedGenres
+                ?.takeIf { now - cachedGenresTimestamp < genreCacheTtlMs && cachedGenreSourceIds == activeIds }
+                ?.let { return it }
 
             val genres =
                 supervisorScope {
-                    activeSources()
-                        .map { source ->
-                            async {
-                                try {
-                                    withTimeoutOrNull(perSourceTimeoutMs) {
-                                        val result = source.getGenreList()
-                                        Log.d("StoryRepo", "${source.sourceName} returned ${result.size} genres")
-                                        result
-                                    } ?: run {
-                                        Log.d("StoryRepo", "${source.sourceName} getGenreList timeout")
+                    val sourceGenres =
+                        activeSrcs
+                            .map { source ->
+                                async {
+                                    try {
+                                        withTimeoutOrNull(perSourceTimeoutMs) {
+                                            val result = source.getGenreList()
+                                            Log.d("StoryRepo", "${source.sourceName} returned ${result.size} genres")
+                                            result
+                                        } ?: run {
+                                            Log.d("StoryRepo", "${source.sourceName} getGenreList timeout")
+                                            emptyList()
+                                        }
+                                    } catch (e: Exception) {
+                                        if (e is CancellationException) throw e
+                                        Log.w("StoryRepo", "${source.sourceName} getGenreList failed", e)
                                         emptyList()
                                     }
-                                } catch (e: Exception) {
-                                    Log.w("StoryRepo", "${source.sourceName} getGenreList failed", e)
-                                    emptyList()
                                 }
-                            }
-                        }.awaitAll()
+                            }.awaitAll()
+
+                    // Gom union tất cả thể loại theo slug và sắp xếp theo tên
+                    sourceGenres
                         .flatten()
-                        // Dedup by slug, ưu tiên giữ Genre có categoryId > 0 (từ TruyenCom)
                         .groupBy { it.slug }
-                        .map { (_, genres) -> genres.maxByOrNull { it.categoryId } ?: genres.first() }
+                        .map { (_, list) -> list.first() }
+                        .sortedBy { it.name }
                 }
 
             Log.d("StoryRepo", "Total genres after merge: ${genres.size}")
             cachedGenres = genres
+            cachedGenreSourceIds = activeIds
             cachedGenresTimestamp = now
             return genres
         }
@@ -257,24 +318,34 @@ class StoryRepository
                     .map { source ->
                         async {
                             try {
-                                withTimeoutOrNull(perSourceTimeoutMs) {
+                                val timeoutMs = timeoutFor(source)
+                                withTimeoutOrNull(timeoutMs) {
                                     val result = source.search(keyword, completedOnly)
                                     Log.d(
                                         "StoryRepo",
                                         "${source.sourceName} search '$keyword' returned ${result.size} results",
                                     )
                                     result
-                                }?.also { circuitBreaker.recordSuccess(source.sourceId) } ?: run {
+                                }?.also {
+                                    circuitBreaker.recordSuccess(source.sourceId)
+                                    authRepository.clearLoginRequired(source.sourceId)
+                                } ?: run {
                                     Log.w(
                                         "StoryRepo",
-                                        "${source.sourceName} search timeout after ${perSourceTimeoutMs}ms",
+                                        "${source.sourceName} search timeout after ${timeoutMs}ms",
                                     )
                                     circuitBreaker.recordFailure(source.sourceId)
                                     emptyList()
                                 }
                             } catch (e: Exception) {
-                                Log.w("StoryRepo", "${source.sourceName} search failed", e)
-                                circuitBreaker.recordFailure(source.sourceId)
+                                if (e is CancellationException) throw e
+                                if (e is ScraperException.LoginRequiredException) {
+                                    Log.w("StoryRepo", "${source.sourceName} search requires login", e)
+                                    authRepository.markLoginRequired(source.sourceId)
+                                } else {
+                                    Log.w("StoryRepo", "${source.sourceName} search failed", e)
+                                    circuitBreaker.recordFailure(source.sourceId)
+                                }
                                 emptyList()
                             }
                         }
@@ -304,8 +375,19 @@ class StoryRepository
                             } else {
                                 fresh.totalChapters
                             }
+                        val cachedCoverClean =
+                            if (
+                                cached.coverImageUrl.contains("data:", ignoreCase = true) ||
+                                cached.coverImageUrl.contains("base64", ignoreCase = true)
+                            ) {
+                                ""
+                            } else {
+                                cached.coverImageUrl
+                            }
+                        val safeCoverImageUrl = fresh.coverImageUrl.ifBlank { cachedCoverClean }
                         val entity =
                             fresh.toEntity().copy(
+                                coverImageUrl = safeCoverImageUrl,
                                 isInLibrary = cached.isInLibrary,
                                 addedTimestamp = cached.addedTimestamp,
                                 storyReplacementsEnabled = cached.storyReplacementsEnabled,
@@ -317,7 +399,15 @@ class StoryRepository
                         Log.d("StoryRepo", "Background refresh failed", e)
                     }
                 }
-                return cached.toDomain()
+                val domainStory = cached.toDomain()
+                return if (
+                    domainStory.coverImageUrl.contains("data:", ignoreCase = true) ||
+                    domainStory.coverImageUrl.contains("base64", ignoreCase = true)
+                ) {
+                    domainStory.copy(coverImageUrl = "")
+                } else {
+                    domainStory
+                }
             }
 
             // No cache — fetch from web (blocking)
@@ -386,9 +476,12 @@ class StoryRepository
             }
 
             // Update metadata (title, url) for existing chapters — NEVER touch content
+            // Bảo toàn title của chương đã tải (isDownloaded == true), chỉ cập nhật url sang domain mới
             val existingChapters = chapters.filter { ch -> existingMap[ch.chapterNumber] != null }
             for (ch in existingChapters) {
-                chapterDao.updateChapterMetadata(storyId, ch.chapterNumber, ch.title, ch.url)
+                val existing = existingMap[ch.chapterNumber]
+                val titleToUpdate = if (existing?.isDownloaded == true) existing.title else ch.title
+                chapterDao.updateChapterMetadata(storyId, ch.chapterNumber, titleToUpdate, ch.url)
             }
 
             return chapters
@@ -472,23 +565,55 @@ class StoryRepository
             storyId: String,
             chapterNumber: Int,
             chapterUrl: String,
-        ): String {
+        ): ChapterContentResult {
             // Try offline first
             val cached = chapterDao.getChapter(storyId, chapterNumber)
-            if (cached?.isDownloaded == true && !cached.content.isNullOrBlank()) {
-                return cached.content
+            val hasBoilerplateFooter =
+                cached?.content?.contains("Nếu truyện không hiện chữ", ignoreCase = true) == true
+            val isCorruptedBoilerplate =
+                hasBoilerplateFooter && (cached.content?.length ?: 0) < 200
+            if (cached?.isDownloaded == true && !cached.content.isNullOrBlank() && !isCorruptedBoilerplate) {
+                val finalContent =
+                    if (hasBoilerplateFooter) {
+                        val stripped = stripBoilerplateFooter(cached.content)
+                        chapterDao.saveChapterContent(storyId, chapterNumber, stripped)
+                        stripped
+                    } else {
+                        cached.content
+                    }
+                return ChapterContentResult(content = finalContent, title = cached.title)
             }
             // Try fetching from web — route to correct source
             return try {
                 val source = sourceFor(chapterUrl)
-                source.getChapterContent(chapterUrl)
+                val result = source.getChapterContentWithTitle(chapterUrl)
+
+                if (cached?.isDownloaded == true && isCorruptedBoilerplate) {
+                    chapterDao.saveChapterContent(storyId, chapterNumber, result.content)
+                }
+
+                // Update chapter title in DB if a real title was extracted
+                if (!result.title.isNullOrBlank()) {
+                    val existing = cached?.title ?: ""
+                    val isDummy = existing.matches(Regex("^Chương \\d+$"))
+                    if (isDummy || existing.isBlank()) {
+                        chapterDao.updateChapterMetadata(
+                            storyId = storyId,
+                            chapterNumber = chapterNumber,
+                            title = result.title,
+                            url = chapterUrl,
+                        )
+                    }
+                }
+
+                result
             } catch (e: Exception) {
+                if (e is CancellationException) throw e
                 // Offline fallback: if chapter has any cached content, use it
                 if (!cached?.content.isNullOrBlank()) {
-                    cached?.content
-                        ?: throw Exception(
-                            "Chương này chưa được tải. Vui lòng kết nối mạng hoặc tải chương trước khi đọc offline.",
-                        )
+                    ChapterContentResult(content = cached.content, title = cached.title)
+                } else if (e is ScraperException.ParseException && e.message?.contains("không còn hoạt động") == true) {
+                    throw e
                 } else {
                     throw Exception(
                         "Chương này chưa được tải. Vui lòng kết nối mạng hoặc tải chương trước khi đọc offline.",
@@ -496,6 +621,16 @@ class StoryRepository
                 }
             }
         }
+
+        private fun stripBoilerplateFooter(content: String): String =
+            content
+                .lines()
+                .filter { line ->
+                    val trimmed = line.trim()
+                    trimmed.isNotBlank() &&
+                        !trimmed.contains("Nếu truyện không hiện chữ", ignoreCase = true) &&
+                        !trimmed.matches(Regex("^[=\\-*_~]{3,}$"))
+                }.joinToString("\n\n")
 
         override suspend fun addToLibrary(storyId: String) {
             storyDao.addToLibrary(storyId)

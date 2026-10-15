@@ -9,7 +9,11 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.personal.apptruyen.data.local.SettingsKeys
 import com.personal.apptruyen.data.model.Chapter
+import com.personal.apptruyen.data.model.ChapterContentResult
+import com.personal.apptruyen.data.model.PokemonMatchRange
+import com.personal.apptruyen.data.model.PokemonSelection
 import com.personal.apptruyen.data.model.ReadingProgress
+import com.personal.apptruyen.data.repository.IPokemonRepository
 import com.personal.apptruyen.data.repository.IReadingProgressRepository
 import com.personal.apptruyen.data.repository.IStoryRepository
 import com.personal.apptruyen.data.repository.ITextReplacementRepository
@@ -21,8 +25,13 @@ import com.personal.apptruyen.ui.navigation.NavigationUtils
 import com.personal.apptruyen.util.TextReplacementHelper
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.collections.immutable.ImmutableList
+import kotlinx.collections.immutable.ImmutableMap
 import kotlinx.collections.immutable.persistentListOf
+import kotlinx.collections.immutable.persistentMapOf
 import kotlinx.collections.immutable.toImmutableList
+import kotlinx.collections.immutable.toImmutableMap
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import javax.inject.Inject
@@ -104,6 +113,15 @@ sealed interface ReaderIntent {
     data class SetAutoScrollSpeed(
         val speed: Int,
     ) : ReaderIntent
+
+    // Pokemon lookup
+    object TogglePokemonLookup : ReaderIntent
+
+    data class SelectPokemon(
+        val match: PokemonMatchRange,
+    ) : ReaderIntent
+
+    object DismissPokemonDialog : ReaderIntent
 }
 
 @HiltViewModel
@@ -115,6 +133,7 @@ class ReaderViewModel
         private val textReplacementRepository: ITextReplacementRepository,
         private val readingProgressRepository: IReadingProgressRepository,
         private val readingStatsRepository: ReadingStatsRepository,
+        private val pokemonRepository: IPokemonRepository,
         private val ttsManager: TtsManager,
         private val dataStore: DataStore<Preferences>,
         @ApplicationScope private val appScope: kotlinx.coroutines.CoroutineScope,
@@ -136,9 +155,19 @@ class ReaderViewModel
 
         fun ttsCycleSpeed() = ttsManager.cycleSpeed()
 
-        fun ttsSetSpeed(speed: Float) = ttsManager.setSpeed(speed)
+        fun ttsSetSpeed(speed: Float) {
+            ttsManager.setSpeed(speed)
+            viewModelScope.launch {
+                dataStore.edit { it[SettingsKeys.TTS_SPEED] = speed }
+            }
+        }
 
-        fun ttsSetPitch(pitch: Float) = ttsManager.setPitch(pitch)
+        fun ttsSetPitch(pitch: Float) {
+            ttsManager.setPitch(pitch)
+            viewModelScope.launch {
+                dataStore.edit { it[SettingsKeys.TTS_PITCH] = pitch }
+            }
+        }
 
         fun ttsSeekAndPlay(index: Int) = ttsManager.seekAndPlay(index)
 
@@ -171,6 +200,10 @@ class ReaderViewModel
             // Auto-scroll
             val autoScrollEnabled: Boolean = false,
             val autoScrollSpeed: Int = 3, // 1-10
+            // Pokemon lookup
+            val pokemonLookupEnabled: Boolean = true,
+            val paragraphPokemonMatches: ImmutableMap<Int, ImmutableList<PokemonMatchRange>> = persistentMapOf(),
+            val selectedPokemon: PokemonSelection? = null,
         )
 
         enum class ReaderTheme { LIGHT, DARK, SEPIA }
@@ -194,7 +227,7 @@ class ReaderViewModel
         private var storyCustomReplacements: List<Pair<String, String>> = emptyList()
 
         /** In-memory cache cho prefetch. Key = chapterNumber, Value = raw content. Đóng app mất. */
-        private val contentCache = java.util.concurrent.ConcurrentHashMap<Int, String>()
+        private val contentCache = java.util.concurrent.ConcurrentHashMap<Int, ChapterContentResult>()
         private var prefetchCount = 0
         private var sessionStartTime: Long = System.currentTimeMillis()
 
@@ -230,6 +263,9 @@ class ReaderViewModel
                 is ReaderIntent.SaveScrollPosition -> saveScrollPosition(intent.position)
                 is ReaderIntent.ToggleAutoScroll -> toggleAutoScroll()
                 is ReaderIntent.SetAutoScrollSpeed -> setAutoScrollSpeed(intent.speed)
+                is ReaderIntent.TogglePokemonLookup -> togglePokemonLookup()
+                is ReaderIntent.SelectPokemon -> selectPokemon(intent.match)
+                is ReaderIntent.DismissPokemonDialog -> dismissPokemonDialog()
             }
         }
 
@@ -259,6 +295,7 @@ class ReaderViewModel
                     val fontFamilyOrdinal = prefs[SettingsKeys.FONT_FAMILY] ?: 0
                     prefetchCount = prefs[SettingsKeys.PREFETCH_CHAPTERS] ?: 0
                     val savedAutoScrollSpeed = prefs[SettingsKeys.AUTO_SCROLL_SPEED] ?: 3
+                    val pokemonLookupEnabled = prefs[SettingsKeys.POKEMON_LOOKUP_ENABLED] ?: true
 
                     ttsManager.setSpeed(defaultSpeed)
                     ttsManager.setPitch(defaultPitch)
@@ -297,7 +334,9 @@ class ReaderViewModel
                             storyReplacementsEnabled = storyReplacementsEnabled,
                             storyReplacements = storyCustomReplacements.toImmutableList(),
                             autoScrollSpeed = savedAutoScrollSpeed,
+                            pokemonLookupEnabled = pokemonLookupEnabled,
                         )
+                    refreshPokemonMatches(_state.value.content, pokemonLookupEnabled)
                 }
             }
         }
@@ -391,12 +430,19 @@ class ReaderViewModel
             currentChapterUrl = url
             viewModelScope.launch {
                 _state.value =
-                    _state.value.copy(isLoading = true, error = null, isLoadingNextChapter = false, scrollToEnd = false)
+                    _state.value.copy(
+                        isLoading = true,
+                        error = null,
+                        isLoadingNextChapter = false,
+                        scrollToEnd = false,
+                        selectedPokemon = null,
+                        paragraphPokemonMatches = persistentMapOf(),
+                    )
                 try {
                     // Check in-memory prefetch cache first
-                    val cachedContent = contentCache.remove(number)
-                    val rawContent = cachedContent ?: repository.getChapterContent(storyId, number, url)
-                    var content = rawContent
+                    val cachedResult = contentCache.remove(number)
+                    val result = cachedResult ?: repository.getChapterContent(storyId, number, url)
+                    var content = result.content
                     if (_state.value.autoFormatEnabled) {
                         content =
                             com.personal.apptruyen.util.TextFormatHelper
@@ -413,7 +459,10 @@ class ReaderViewModel
                         )
 
                     val chapter = chapters.find { it.chapterNumber == number }
-                    val title = chapter?.title ?: "Chương $number"
+                    // Use extracted title if available, otherwise fall back to chapter.title
+                    val title =
+                        result.title?.takeIf { it.isNotBlank() }
+                            ?: chapter?.title ?: "Chương $number"
                     val maxChapter = if (chapters.isNotEmpty()) chapters.maxOf { it.chapterNumber } else 0
                     _state.value =
                         _state.value.copy(
@@ -426,6 +475,7 @@ class ReaderViewModel
                             hasNextChapter = maxChapter == 0 || number < maxChapter,
                             hasPrevChapter = number > 1,
                         )
+                    refreshPokemonMatches(content, _state.value.pokemonLookupEnabled)
 
                     // Set content for TTS
                     if (autoPlay) {
@@ -483,8 +533,8 @@ class ReaderViewModel
                         if (contentCache.containsKey(nextNum)) continue // đã cache rồi
                         val nextChapter = chapters.find { it.chapterNumber == nextNum } ?: continue
                         try {
-                            val content = repository.getChapterContent(storyId, nextNum, nextChapter.url)
-                            contentCache[nextNum] = content
+                            val result = repository.getChapterContent(storyId, nextNum, nextChapter.url)
+                            contentCache[nextNum] = result
                             // Evict old entries if cache exceeds limit
                             while (contentCache.size > prefetchCount + 2) {
                                 val oldest = contentCache.keys().toList().minOrNull() ?: break
@@ -687,6 +737,68 @@ class ReaderViewModel
                     prefs[SettingsKeys.AUTO_SCROLL_SPEED] = clamped
                 }
             }
+        }
+
+        // ── Pokemon lookup ──
+
+        private var pokemonMatchJob: Job? = null
+
+        fun togglePokemonLookup() {
+            val newValue = !_state.value.pokemonLookupEnabled
+            _state.update {
+                it.copy(
+                    pokemonLookupEnabled = newValue,
+                    selectedPokemon = if (newValue) it.selectedPokemon else null,
+                )
+            }
+            viewModelScope.launch {
+                dataStore.edit { prefs ->
+                    prefs[SettingsKeys.POKEMON_LOOKUP_ENABLED] = newValue
+                }
+            }
+            refreshPokemonMatches(_state.value.content, newValue)
+        }
+
+        private fun selectPokemon(match: PokemonMatchRange) {
+            _state.update {
+                it.copy(
+                    selectedPokemon =
+                        PokemonSelection(
+                            entry = match.entry,
+                            matchedText = match.matchedText,
+                            initialFormIndex = match.initialFormIndex,
+                        ),
+                )
+            }
+        }
+
+        private fun dismissPokemonDialog() {
+            _state.update { it.copy(selectedPokemon = null) }
+        }
+
+        private fun refreshPokemonMatches(
+            content: String,
+            enabled: Boolean,
+        ) {
+            pokemonMatchJob?.cancel()
+            if (!enabled || content.isBlank()) {
+                _state.update { it.copy(paragraphPokemonMatches = persistentMapOf()) }
+                return
+            }
+            pokemonMatchJob =
+                viewModelScope.launch {
+                    runCatching {
+                        val paragraphs = TtsManager.splitIntoParagraphs(content)
+                        val matchesMap =
+                            pokemonRepository
+                                .findMatchesInParagraphs(paragraphs)
+                                .mapValues { (_, list) -> list.toImmutableList() }
+                                .toImmutableMap()
+                        _state.update { it.copy(paragraphPokemonMatches = matchesMap) }
+                    }.onFailure { e ->
+                        if (e is CancellationException) throw e
+                    }
+                }
         }
 
         fun toggleTextReplacement() {

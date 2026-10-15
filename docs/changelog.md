@@ -6,6 +6,184 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 
 ## [Unreleased]
 
+## [v3.0.1] - 2026-10-15
+
+### Fix bug
+
+- **Khắc phục lỗi tự động ngắt dòng ở tên riêng và từ ghép có dấu gạch nối (`Spider-Man` → `Spider\n-Man`)**:
+  - Gỡ bỏ quy tắc regex `(?<!\n)\s*([\-–—]\s*[\p{L}])` trong `TextFormatHelper.formatChapter()` từng chèn ký tự xuống dòng `\n` trước mọi dấu gạch nối giữa từ (làm đứt các tên như `Spider-Man`, `X-Men`, `Ho-Oh`, `Porygon-Z`, `Hán-Việt` và câu có dấu gạch ngang giải thích), đồng thời vẫn giữ nguyên các đoạn hội thoại bắt đầu bằng dấu gạch đầu dòng ở đầu đoạn văn.
+  - Bổ sung bộ unit test `TextFormatHelperTest.kt` (4 tests).
+
+## [v3.0.0] - 2026-10-14
+
+### Thêm mới
+
+- **Từ điển Pokémon khi đọc truyện (Pokemon Image Hover / Lookup)**:
+  - Tích hợp danh mục chuẩn hóa `app/src/main/assets/pokemon_pokedex.json` gồm trọn vẹn 1.025 loài Pokémon và 1.309 hình thái (Mặc định, Siêu Cấp/Mega, Gigamax, Alola, Galar, Hisui, Paldea...), giữ toàn bộ tên Việt (Romaji trên cổng Pokémon VN), Anh, Trung, Nhật từ script gốc và **bổ sung toàn diện tên Hán-Việt** (*Bì Khả Khâu, Tiểu Hỏa Long, Phun Hỏa Long, Diệu Oa Chủng, Kiệt Ni Quy, Thủy Tiễn Quy, Siêu Mộng, Mộng Huyễn, Liệt Không Tọa, Cố Lạp Đốn, Cái Âu Ca, Khoái Long, Bạo Lý Long, Cảnh Điển, Hồ Địa, Đại Nham Xà, Cự Kim Quái, Lộ Ca Lợi Áo, Sa Nại Đóa...*) cùng hàng trăm biến thể dịch/convert đồng nhân tiếng Việt (*Siêu Cấp ..., Siêu Cực Cự Hóa ..., ... A La Lạp*).
+  - Xây dựng bộ nhận diện `PokemonMatcher` (`PokemonLookupHelper.kt`, `PokemonRepository.kt`) dùng cấu trúc **Trie ưu tiên từ dài nhất (Longest-Match-First)** bất biến và thread-safe trên `Dispatchers.Default`, kiểm tra ranh giới từ (`isWordBoundary`) và danh sách loại trừ từ đơn dễ gây dương tính giả (`EXCLUDED_COMMON_ALIASES`), chỉ áp dụng ở tầng hiển thị UI mà không làm thay đổi văn bản gốc gửi sang `TtsManager`/`TtsService`.
+  - Tạo `ReaderParagraphItem` và `PokemonLookupDialog` (`ReaderPokemonSupport.kt`, `PokemonTypeColors.kt`): tô màu nổi bật kèm đường gạch chân nét đứt (`drawBehind`) cho tên Pokémon trong đoạn văn; chạm vào tên Pokémon mở hộp thoại xem ảnh chính thức (qua Coil 3 `SubcomposeAsyncImage`), huy hiệu 18 hệ tiếng Việt chuẩn màu, chip chuyển đổi hình thái và thanh chuyển đổi ngôn ngữ (`Hán-Việt`, `Việt / Romaji`, `Trung`, `Anh`); chạm vào chữ thường vẫn ẩn/hiện thanh công cụ (`onToggleBars`), nhấn giữ vẫn phát TTS (`onSeekAndPlay`) và chế độ Copy (`SelectionContainer`) vẫn hoạt động nguyên vẹn.
+  - Mặc định **BẬT (`true`)** qua khóa `SettingsKeys.POKEMON_LOOKUP_ENABLED`, đồng bộ công tắc `"Từ điển Pokémon"` trong cả `ReaderSettingsPanel` và `SettingsScreen`.
+  - Bổ sung 9 unit tests trong `PokemonLookupHelperTest.kt` (TC-01..TC-06) và `ReaderViewModelTest.kt` (TC-07..TC-09).
+
+### Fix bug
+
+- **Khắc phục lỗi lọc theo thể loại và tìm kiếm trên nguồn Wikidich (`wikicv.org`)**:
+  - Phân tách rõ 2 chế độ tìm kiếm của `wikicv.org`:
+    * Chế độ 1 (`search` theo từ khóa): gọi `$baseUrl/tim-kiem?q=$encoded&qs=1` và lọc `completedOnly` ở tầng client (tránh truyền kèm tham số bộ lọc làm hỏng tìm kiếm từ khóa).
+    * Chế độ 2 (`getStoriesByGenre` lọc theo tag/thể loại): gọi đúng cấu trúc form bộ lọc nâng cao `$baseUrl/tim-kiem?qs=1$statusParam&$filterParam&tc=&tf=0&m=$month&y=$year&q=$startParam` với đầy đủ tham số `status`, `tag`/`genre`/`age`/`gender`/`official`/`ending`, `tc=&tf=0&m=...&y=...&q=` và phân trang `&start=${(page - 1) * 20}`.
+  - Chuyển `getCompletedStories` sang `$baseUrl/bang-xep-hang?so=5$startParam` ("Mới hoàn thành", phản hồi ~1.3s) để không chiếm hạn mức điều tiết (rate-limit) của endpoint `/tim-kiem`.
+  - Trong `StoryRepository`: nâng `timeoutFor(wikidich)` lên `25_000L` (25s) và chỉ tải 1 trang/lượt (`sourcePagesFor`) để không bị cắt ngang ở giây thứ 10 khi `wikicv.org` áp dụng độ trễ điều tiết ~12.03s giữa các request `/tim-kiem` liên tiếp.
+- **Khắc phục lỗi mất ảnh bìa và ảnh review trên nguồn SsTruyện (`sstruyen.pics`)**:
+  - Bổ sung `extractImageSrc` ưu tiên đọc `data-src` / `data-lazy-src` / `data-original` và loại bỏ chuỗi placeholder 1×1px `data:image/png;base64,...` trong các thẻ `<img class="lazy">` (từng khiến 80% truyện từ mục thứ 7 trở đi trên trang tìm kiếm/bộ lọc bị ghép nhầm thành URL lỗi `https://file.sstruyen.pics/files/data:image/png;base64,...`).
+  - Chuẩn hóa đường dẫn `/covers/...` có dấu gạch chéo đầu từ REST API về đúng CDN `https://file.sstruyen.pics/files/covers/...` và tự động fallback lấy `coverUrl` từ `api.sstruyen.pics/novels/{slug}` trong `getStoryDetail`.
+  - Lắng nghe `repository.observeStory(story.id)` trong `StoryDetailViewModel` và làm sạch `coverImageUrl` hỏng trong cache Room (`StoryRepository.getStoryDetail`), kèm giao diện fallback chữ cái đầu trong `HeroSection` (`StoryDetailScreen`).
+
+### Sửa đổi
+
+- **Cập nhật hệ thống quản trị Agent (`.agents/`)**:
+  - Bổ sung quy tắc bắt buộc trong `.agents/rules/00-core.md` và `.agents/rules/02-quality.md`: chỉ chạy `.\gradlew.bat assembleRelease` để xuất file APK release khi User yêu cầu rõ ràng.
+  - Đồng bộ `Nguyên Tắc Thẩm Định Độc Lập`, `Luật Bằng Chứng Bổ Sung`, mục `Phát Hiện Mới` và `Các Tấn Công Đã Thử (Attempted Attack Vectors)` (tối thiểu 3 kịch bản phản biện) từ dự án Vikini sang `.agents/agents/reviewer/agent.md` và `.agents/scripts/claude-reviewer-prompt.md`.
+- **Tối ưu tốc độ tải chương truyện song song theo lô (Parallel Batch Download with Ordered Persistence)**:
+  - Chuyển `DownloadRepository.downloadChapters` từ tải tuần tự từng chương sang tải song song theo lô `DOWNLOAD_BATCH_SIZE = 4` chương/lô (`coroutineScope` + `async`/`awaitAll`).
+  - Đảm bảo thứ tự chương tuyệt đối: chuẩn hóa đầu vào `chapters.sortedBy { it.chapterNumber }` và sắp xếp kết quả của mỗi lô theo `outcome.chapter.chapterNumber` tăng dần trước khi ghi tuần tự vào Room DB (`saveChapterContent`, `updateChapterMetadata`) và phát tiến độ `DownloadProgress`.
+  - Chuyển thời gian chờ điều tiết từ sau mỗi chương (500ms/chương) sang giữa các lô (`BASE_BATCH_DELAY_MS = 250L`, nhân đôi lên tối đa `3000L` khi có lỗi trong lô), giảm ~8x thời gian chờ điều tiết.
+  - Sửa lỗi nuốt `CancellationException` trong vòng lặp retry, bổ sung cơ chế dừng sớm (Fail-Fast) khi gặp `LoginRequiredException` hoặc khi 3 lô liên tiếp thất bại hoàn toàn (`MAX_CONSECUTIVE_FAILED_BATCHES = 3`), và phân mảnh truy vấn `getChaptersByNumbers` theo `SQLITE_MAX_BIND_ARGS = 900`.
+  - Cập nhật `DownloadService` bảo toàn số chương đã xử lý (`lastProgress`) khi dừng giữa chừng và hiển thị thông báo tiếng Việt nhắc đăng nhập lại khi phiên nguồn truyện hết hạn (`buildCompletionText`).
+  - Bổ sung 8 unit tests trong `DownloadRepositoryTest.kt` và 3 unit tests trong `DownloadServiceTest.kt`.
+- **Nâng cấp kiến trúc lớn (Media3, Room 3, Kotlin 2.4, AGP 9.4)**:
+  - **Hạ tầng âm thanh TTS (`androidx.media3:media3-session:1.11.1`)**:
+    * Chuyển đổi `TtsService` từ `MediaSessionCompat` (deprecated) sang `MediaSessionService` kết hợp `TtsPlayer` (`SimpleBasePlayer`) và `DefaultMediaNotificationProvider`.
+    * Tạo `TtsPlaybackStateMachine` thuần Kotlin quản lý trạng thái phát, timer timeout auto-advance 10s duy nhất, trạng thái `PausedDuringAutoAdvance`, cờ một lần `suppressNextPlay` (`onPlayRequested()`) và thuộc tính `isActiveOrBuffering` để chống race condition khi tạm dừng lúc tải chương mới mà vẫn bảo toàn 100% thao tác chuyển chương thủ công (Next/Prev, chọn chương, 2-chạm/3-chạm tai nghe).
+    * Bảo mật kết nối `MediaSession.Callback.onConnect` và dual-binding `super.onBind(intent) ?: binder` với ép kiểu an toàn trong `TtsManager`.
+  - **Room 3.0 KMP (`androidx.room3:3.0.3` + `androidx.sqlite:sqlite-bundled:2.7.1`)**:
+    * Nâng cấp toàn bộ 5 Entity, 5 DAO và `AppDatabase` sang package `androidx.room3`, cấu hình plugin `id("androidx.room3")` với `room3 { schemaDirectory(...) }` và `.setDriver(BundledSQLiteDriver())`.
+    * Chuyển đổi `MIGRATION_5_6`..`MIGRATION_8_9` sang `override suspend fun migrate(connection: SQLiteConnection)`.
+    * Tách interface `DatabaseTransactionRunner` (`withWriteTransaction`) cho `DownloadRepository.deleteStory` đảm bảo xóa truyện nguyên tử và kiểm thử đơn vị sạch trên JUnit 5 JVM.
+  - **Toolchain & Build System**:
+    * Nâng cấp Kotlin lên `2.4.21` (đồng bộ Compose Compiler & Serialization plugins), Google KSP `2.3.12`, và `kotlinx-serialization-json:1.11.0`.
+    * Nâng cấp Android Gradle Plugin (AGP) lên `9.4.0` và Gradle Wrapper lên `9.6.0`.
+    * Bổ sung các bộ test mới: `TtsPlaybackStateTest.kt` (7 tests), `DownloadRepositoryTest.kt` (2 tests), và instrumented test `AppDatabaseMigrationTest.kt`.
+
+## [v2.8.8] - 2026-10-13
+
+### Fix bug
+
+- **Khắc phục lỗi không tìm thấy truyện khi chỉ bật nguồn Wikidich (`wikicv.org`)**:
+  - Bọc toàn bộ các phương thức mạng của `WikidichScraper` trong `withContext(Dispatchers.IO)`, khắc phục lỗi `NetworkOnMainThreadException` khi gọi từ `viewModelScope` khiến mọi truy vấn bị hủy trước khi gửi request.
+  - Sửa selector trạng thái truyện trong `WikidichScraper.parseStoryList` thành `.book-publisher a[href*='status=']` (tránh lấy nhầm thẻ `.book-publisher` đầu tiên chứa tên người đăng khiến 100% truyện bị nhận nhầm là `"Đang ra"`).
+  - Xóa cache bộ nhớ khi gặp trang yêu cầu đăng nhập (`checkLoginRequired`), tự động làm mới cache danh sách thể loại (`cachedGenreSourceIds`) khi bật/tắt nguồn trong Cài đặt, và mở rộng danh sách 24 thể loại Wikidich.
+- **Khắc phục 4 lỗi vận hành nguồn SsTruyen (`sstruyen.pics`)**:
+  - *Hiển thị nội dung chương dùng `<br><br>`*: Xử lý đồng nhất cả `<br>` và `<p>` trong `div.prose`, loại bỏ khối footer `div.text-center` chứa câu thông báo *"Nếu truyện không hiện chữ..."* từng khiến `proseEl.select("p")` bỏ sót toàn bộ nội dung chương nằm ngoài thẻ `<p>`. Đồng thời tự động phục hồi (re-fetch) nếu chương đã lưu offline trước đó bị dính nội dung thông báo lỗi này.
+  - *Hiển thị số chương*: Bổ sung selector `span[itemprop=dateModified]` và regex `(?:Chương|Hồi|C)\s*(\d+)` giúp hiển thị badge số chương chính xác trên thẻ truyện `StoryCardPremium` khi tìm kiếm và duyệt danh mục.
+  - *Bộ lọc thể loại*: Thay thế việc cào HTML SSR client-rendered bằng REST API chính thức `GET https://api.sstruyen.pics/genres`, tải trọn vẹn 93 thể loại tiếng Việt trong FilterBottomSheet, có fallback HTML.
+  - *Phân trang danh sách chương*: Tích hợp API `GET https://api.sstruyen.pics/novels/{slug}` lấy trực tiếp `novelId` và `chapterCount`, phân trang đầy đủ `novels/{novelId}/chapters?page=...&limit=50&sort=asc`, chấm dứt hiện tượng nhảy cóc mất các chương ở giữa (từ chương 51 trở đi).
+
+### Thêm mới
+
+- **Nâng cấp nguồn SsTruyen sang `sstruyen.pics` (v2.8.4)**:
+  - Chuyển đổi tên miền chính từ `https://sstruyen.net` sang `https://sstruyen.pics` (kho dữ liệu 58.265 truyện, 82 thể loại).
+  - Tích hợp REST API danh sách chương `https://api.sstruyen.pics/novels/{novelId}/chapters?page={page}&limit=50&sort=asc` với cơ chế tự phục hồi cache `novelId` và gom lỗi trang thread-safe.
+  - Cập nhật bộ lọc hoàn thành `status=completed` và thứ tự luôn mới nhất `sort=updatedAt` trên endpoint `/danh-sach/bo-loc`.
+  - Cập nhật selector nội dung chương mới `div.prose`, `div.wrapper.prose` (xử lý đồng nhất cả `<p>` và `<br>`).
+  - Hỗ trợ tương thích ngược tuyệt đối:
+    * Khai báo `legacyHosts` trên `StorySource` và extension `matchesUrl` định tuyến host chính xác (hỗ trợ `sstruyen.net`).
+    * Bảo toàn 100% tiêu đề (`title`) và nội dung chương đã tải offline trong Room DB khi cập nhật metadata (`mergeAndInsertChapters`).
+    * Phân luồng đọc chương URL cũ `sstruyen.net` kế thừa 9 selectors và `cleanHtml` xử lý `<br>`.
+  - Bổ sung bộ 15 unit tests với MockWebServer3 trong `SsTruyenScraperTest.kt` và 4 unit tests trong `StoryRepositoryTest.kt`.
+- **Tích hợp nguồn truyện Wikidich (`wikicv.org`)**:
+  - `WikidichScraper.kt` kế thừa `BaseScraper`, tự giải mã chữ ký động SHA-256 (`fuzzySign`) từ script trang web.
+  - Phân trang AJAX danh sách chương (99 chương/trang) với điều kiện dừng chính xác theo thẻ DOM.
+  - Hỗ trợ 46 thể loại truyện Wikidich và bộ lọc watermark bản quyền (`wikidich`, `nhúng`, `truyện được nhúng bởi`,...).
+  - Badge nhận diện nguồn "WD" trên thẻ truyện `StoryCardPremium`.
+- **Hạ tầng xác thực nguồn truyện (Source Authentication)**:
+  - Kiến trúc phân lớp Clean Architecture: `ISourceAuthRepository` + `SourceAuthRepository` tại `data/repository/`, bind qua Hilt.
+  - `SourceAuthManager` và `CookieStore`/`AndroidCookieStore` quản lý cookie host-only, probe kiểm tra phiên không mang cookie rò rỉ (`CookieJar.NO_COOKIES`).
+  - Màn hình `SourceLoginScreen`: Đăng nhập web SSO qua diễn đàn Dịch Tiếng Hoa (`forum.dichtienghoa.com/dth/auth`) trong WebView với Referer `https://wikicv.org/`, kèm navigation guard chống chuyển hướng ngoài phạm vi.
+  - Dialog `PasteCookieDialog`: Phương án dự phòng cho phép người dùng dán chuỗi cookie session (`express.sid`) copy từ trình duyệt máy tính.
+  - Mục "Tài khoản nguồn truyện (Wikidich)" trong `SettingsScreen` quản lý trạng thái phiên, đăng nhập và đăng xuất an toàn.
+  - Banner cảnh báo tiếng Việt trong `SearchScreen` và `ExploreScreen` khi nguồn yêu cầu đăng nhập (`LoginRequiredException`), cho phép bấm "Đăng nhập" trực tiếp hoặc "Đóng" mà không làm lỗi các nguồn khác trong luồng gộp kết quả.
+  - Ngoại lệ `LoginRequiredException` trong cây lỗi `ScraperException`.
+- **Bảo mật và sao lưu**: Bổ sung `data_extraction_rules.xml` và `backup_rules.xml` loại trừ thư mục dữ liệu WebView (`app_webview/`) khỏi Android Auto Backup.
+- Hệ thống quản trị đa tác tử trong `.agents/`, adopt từ Project AURORA và Vikini rồi điều chỉnh cho Android/Kotlin:
+  - Rules `00-core`, `01-coding`, `02-quality`, `03-ui`, `04-scraping` (thay rule song ngữ), `05-plan-review`, `06-docs`
+  - Subagents `planner`, `reviewer` (kèm `allowlist`, `evidence-bar`, `mental-simulation` S1–S6 cho Room/Coroutines/TTS/scraper), `qa` (on-demand)
+  - Dual-reviewer: Claude Code CLI (`scripts/run-claude.ps1`, exit 42 khi hết quota) + `@reviewer` dự phòng
+  - Code Freeze Guard (`scripts/code-freeze-guard.js` + `hooks.json`): khóa `app/**` cho đến khi plan có `[PLAN_APPROVED]`; luôn hỏi khi sửa Room DB/schema, Manifest, cookie/auth, build/CI, test, keystore, `.agents/`; allowlist lệnh Gradle/git/curl read-only; Test Integrity Guard cho JUnit 5/MockK
+  - Workflows `/debug`, `/post-fix`
+- Khắc phục toàn bộ 19 phát hiện Audit của Claude Code CLI cho hệ thống governance `.agents/`:
+  - Module `plan-approval.js`: máy trạng thái phê duyệt plan (Header + Thẻ `[PLAN_APPROVED]`), kiểm tra whitelist chuyển trạng thái, giải quyết chunks và mô phỏng ghi file, quản lý pending writes lock, CLI `status`.
+  - Module `review-run.js`: thu thập snapshot và evidence cố định, render prompt độc lập theo thư mục lượt, phân loại lỗi CLI Claude Pro (AUTH trước QUOTA), xác minh append-only và tự động khôi phục snapshot khi lỗi/tampered.
+  - Bộ 53 unit tests cho hệ thống governance: `code-freeze-guard.test.js` (31 tests), `plan-approval.test.js` (12 tests), `review-run.test.js` (10 tests).
+- `docs/plans/README.md` (index + template plan), `docs/specs/`, `docs/lessons-learned.md`
+
+### Sửa đổi
+
+- Nâng cấp Code Freeze Guard và điều kiện mở khóa toàn cục:
+  - Mở khóa khi không còn plan nào bị blocking VÀ có ít nhất một plan có header ∈ {`Approved`, `In Progress`} kèm dòng không trống cuối cùng là `[PLAN_APPROVED]`.
+  - Khóa toàn bộ nội dung plan khi đã được duyệt (`[APPROVED_PLAN_LOCKED]`) để chống tự ý sửa đổi phạm vi task.
+  - Khóa ghi đang treo chống TOCTOU khi có nhiều thao tác ghi đồng thời lên cùng một plan (`[CONCURRENT_PLAN_WRITE]`).
+  - Phân loại quyết định hook: dùng `ask` thông thường (cho phép User xác nhận), chỉ dùng `force_ask` cho 2 lỗi nội bộ guard (`[GUARD_MODULE_LOAD_FAILED]`, `[PAYLOAD_UNREADABLE]`).
+  - Token hóa lệnh PowerShell 5.1 và cấm toàn bộ ký tự ngoài ASCII in được (`[NON_ASCII_COMMAND]`) để ngăn chặn injection qua Unicode quotes/dashes/spaces.
+  - Tự cho phép `curl.exe -q` chỉ tới 8 host nguồn truyện chính thức (D6), cấm redirect `-L` và các cờ ghi/đọc file; các lệnh mạng khác luôn hỏi User.
+  - Giới hạn toán hạng Git và các cmdlet đọc file chỉ trong working tree của repo, chặn Windows device names (`NUL`, `CON`, `AUX`, `PRN`, `COM1-9`, `LPT1-9`) và đường dẫn vượt cấp `..`.
+  - Sandbox cho Claude Reviewer CLI: gỡ bỏ tool `Bash` (`--disallowedTools Bash`), cung cấp bằng chứng lệnh qua `evidence.md`, hạn chế WebFetch tới 17 host chính thức và deny secrets.
+- Gộp `.agent/` vào `.agents/`: `project-rules.md` chuyển vào `00-core`/`01-coding`, `update-docs.md` thành `06-docs.md`, workflow `/update-docs` chuyển sang `.agents/workflows/`
+- Chuyển `docs/superpowers/plans|specs` sang `docs/plans/` và `docs/specs/`
+- `AGENTS.md`, `docs/contributing.md`: trỏ sang hệ thống mới, thêm bước lập plan vào quy trình thêm tính năng
+- **StoryRepository**: Bắt và cô lập `LoginRequiredException` trong tìm kiếm, khám phá và tải thể loại; chuyển sang gộp thể loại (union) thay vì giao (intersection) khi có nguồn cần đăng nhập; bảo toàn khả năng đọc offline cho truyện từ nguồn đã bị gỡ bỏ.
+- **WebViewContentLoader**: Bổ sung `wikicv.org` và `wikicv.net` vào danh sách domain được phép tải nội dung.
+- **SettingsDataStore**: Thêm `SourceIds` constants (`TANGTHUVIEN`, `SSTRUYEN`, `WIKIDICH`, `DEPRECATED_SOURCES`) và mapping nhãn tiếng Việt `SOURCE_LABELS`.
+
+### Fix bug
+
+- Khắc phục các lỗ hổng Code Freeze Guard:
+  - Fix lỗ hổng tự phê duyệt và deadlock trạng thái (F01, F02, F11, N6, N7, N8, N9).
+  - Fix các đường bypass lệnh qua subexpressions `iex`, pipe newlines, Unicode quotes/dashes, command flags, traversal, Windows devices `NUL` (F03, F04, F05, F06, F08, N1, N3, N4).
+  - Fix lỗ hổng phân loại lỗi quota Claude CLI không nhận diện được chuỗi thật `You've hit your session limit` (M1).
+  - Fix nguy cơ Claude CLI bypass quyền khi dùng `--dangerously-skip-permissions` bằng việc chuyển sang `--permission-mode dontAsk` và gỡ bỏ tool `Bash` (F09, N5).
+
+### Xóa bỏ
+
+- Thư mục `.agent/` và `docs/superpowers/`
+- Gỡ bỏ 2 nguồn truyện trực tuyến: **TruyenFull** (`truyenfull.today`) và **TruyenCom** (`truyencom.com`) khỏi `ScraperModule.kt`, xóa `TruyenFullScraper.kt`, `TruyenComScraper.kt` và unit test tương ứng. Toàn bộ truyện và chương đã tải trước đó của 2 nguồn này trong Room Database vẫn được bảo toàn và đọc offline bình thường.
+
+## [v2.8.7] - 2026-08-03
+
+### Thêm mới
+- **Bộ lọc Thể loại**: Khi bật đồng thời nhiều nguồn truyện, bộ lọc giờ đây sẽ tự động hiển thị danh sách thể loại là phần giao (intersection) của tất cả các nguồn đang bật, đảm bảo các thể loại hiển thị chắc chắn tồn tại trên mọi nguồn. Nếu chỉ bật một nguồn, sẽ hiển thị đầy đủ thể loại của riêng nguồn đó.
+- **Tên chương TTV**: Thêm `ChapterContentResult` data class và `getChapterContentWithTitle()` trong `StorySource` interface để trả title thực khi scrape nội dung chương. Khi đọc/tải chương TTV, title được extract và tự động cập nhật vào DB — danh sách chương sẽ hiển thị tên đầy đủ thay vì chỉ "Chương X".
+
+### Sửa đổi
+- **Nâng cấp dependencies**: Gradle 9.4.1→9.5.1, AGP 9.2.0→9.3.0, Hilt 2.59.2→2.60.1. AGP 9.3.0 fix lỗi file handle leak trên Windows.
+
+### Fix bug
+- **Fix TTV `#số chương` hiển thị trong nội dung chương**: Loại bỏ prefix `#8 ` từ các paragraph và bỏ việc prepend titleEl vào đầu content — nội dung chương không còn dòng `#8 Chương 8: ...` thừa.
+- **Fix TTV thiếu số chương trong danh sách**: Trang danh sách TTV (lọc, tìm kiếm, hoàn thành) không cung cấp số chương trong HTML. Thêm `enrichWithChapterCounts()` tự động fetch detail page song song (batch 5) để lấy `totalChapters` cho từng truyện.
+
+## [v2.8.6] - 2026-07-21
+
+### Fix bug
+
+- Fix `TangThuVienScraper`: Sửa lỗi thiếu truyện trong kết quả tìm kiếm/lọc do selector quá khắt khe
+- Fix `TangThuVienScraper.getGenreList()`: Sửa lỗi bộ lọc thể loại TTV chỉ hiện 7 tags (fallback) thay vì 80+ tags. Nguyên nhân: fetch từ trang chủ `/` (render client-side bằng Next.js, Jsoup không thấy genre links) → đổi sang fetch từ `/truyen` (SSR). Cập nhật fallback list đầy đủ.
+- Fix `TextFormatHelper`: Bỏ tính năng tự động ngắt dòng ở dấu gạch ngang làm hỏng mạch đọc TTS
+
+
+### Sửa đổi
+- **Tàng Thư Viện**: Cập nhật scraper hỗ trợ giao diện React/Next.js mới (`tangthuvien.org`). Cập nhật logic lấy danh sách chương, tìm kiếm, lọc theo thể loại và tự động migrate URL truyện TTV cũ trong CSDL.
+
+
+### Fix bug
+- **Fix: Lỗi tự động thoát trang đăng nhập LacaTruyen**: Sửa lỗi `LoginWebViewScreen` nhận diện nhầm các cookie không liên quan (như của Cloudflare) thành cookie đăng nhập thành công, khiến app tự động quay về trang cài đặt trước khi user kịp đăng nhập.
+- **Fix: Lỗi WebView trả về chữ loạn cho tài khoản đã đăng nhập**: Tinh chỉnh lại điều kiện trong `WebViewContentFetcher.kt` (`CHECK_READY_JS`) để kiểm tra chính xác các dấu hiệu chữ loạn (anagram) thông qua Regex `/[a-zà-ỹ][A-ZĂÂĐÊÔƠƯÀ-Ỹ]/`. Đảm bảo WebView đợi cho đến khi ReactJS giải mã hoàn tất trước khi bóc tách văn bản.
+- **Fix: TTS đọc dấu ngoặc kép và dấu phân cách**: Thêm bộ lọc loại bỏ các dấu ngoặc kép (`"`, `“`, `”`) và các dòng phân cách dài (`---`, `___`, `+++`, `===`, `***`, `~~~`) trong `TtsTextPreprocessor.kt` để TTS không đọc lớn các ký tự này, giúp trải nghiệm nghe truyện mượt mà hơn (đặc biệt trong các đoạn hội thoại).
+- **Fix: Chữ bị loạn ở nguồn LacaTruyen**: Sửa lỗi trả về sai fallback `previewHtml` (vốn đã bị mã hóa loạn chữ) khi luồng Native Decryption gặp thất bại trong `LacaTruyenScraper.kt`. Thay vì trả về `previewHtml`, giờ đây trả về `null` để ứng dụng chuyển sang phương án dự phòng bằng WebView, giúp hiển thị chữ chuẩn sau khi JS giải mã xong.
+- **Fix: Tốc độ và cao độ TTS bị reset**: Tốc độ và cao độ đọc truyện điều chỉnh ở màn hình Reader không được lưu vào DataStore, dẫn đến bị reset về mặc định khi khởi động lại app. Khắc phục bằng cách ghi DataStore trong `ReaderViewModel` ngay khi user điều chỉnh tốc độ hoặc cao độ.
+
+### Thêm mới
+- **LacaTruyenScraper: Native Decryption** — Bổ sung thuật toán tự động giải mã nội dung chương của LacaTruyen (lacatruyen.buzz) trực tiếp bằng Kotlin. Bỏ qua sự phụ thuộc vào WebView, giúp load truyện nhanh chóng và khắc phục hoàn toàn lỗi nội dung truyện bị mã hóa hoặc hiển thị trắng.
+- **Tài liệu: Reverse Engineering** — Thêm file `docs/scraping_lacatruyen_decryption.md` ghi lại chi tiết luồng giải mã nhiều lớp (Global Key, Dynamic Salt, Dynamic Key) của LacaTruyen làm tài liệu tham khảo.
+
 ## [v2.8.4] - 2026-06-15
 
 ### Thêm mới

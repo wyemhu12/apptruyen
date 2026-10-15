@@ -21,6 +21,7 @@ class SettingsViewModelTest {
 
     private lateinit var dataStore: DataStore<Preferences>
     private lateinit var backupRepository: BackupRepository
+    private lateinit var authRepository: com.personal.apptruyen.data.repository.ISourceAuthRepository
     private lateinit var viewModel: SettingsViewModel
     private val dispatcher = UnconfinedTestDispatcher()
 
@@ -29,6 +30,8 @@ class SettingsViewModelTest {
         Dispatchers.setMain(dispatcher)
         dataStore = mockk(relaxed = true)
         backupRepository = mockk(relaxed = true)
+        authRepository = mockk(relaxed = true)
+        coEvery { authRepository.isLoggedIn(any()) } returns false
     }
 
     @AfterEach
@@ -43,7 +46,7 @@ class SettingsViewModelTest {
             val prefs = preferencesOf()
             every { dataStore.data } returns flowOf(prefs)
 
-            viewModel = SettingsViewModel(dataStore, backupRepository)
+            viewModel = SettingsViewModel(dataStore, backupRepository, authRepository)
             val state = viewModel.state.first()
 
             assertEquals(1.0f, state.ttsSpeed, 0.01f)
@@ -72,7 +75,7 @@ class SettingsViewModelTest {
                 )
             every { dataStore.data } returns flowOf(customPrefs)
 
-            viewModel = SettingsViewModel(dataStore, backupRepository)
+            viewModel = SettingsViewModel(dataStore, backupRepository, authRepository)
             val state = viewModel.state.first()
 
             assertEquals(1.5f, state.ttsSpeed, 0.01f)
@@ -83,6 +86,19 @@ class SettingsViewModelTest {
             assertFalse(state.dynamicColor)
             assertFalse(state.textReplacementEnabled)
             assertEquals(5, state.prefetchChapters)
+        }
+
+    @Test
+    fun `checkAuthStatus updates isWikidichLoggedIn in state`() =
+        runTest {
+            coEvery { authRepository.isLoggedIn("wikidich") } returns true
+            every { dataStore.data } returns flowOf(preferencesOf())
+
+            viewModel = SettingsViewModel(dataStore, backupRepository, authRepository)
+            advanceUntilIdle()
+
+            val state = viewModel.state.first()
+            assertTrue(state.isWikidichLoggedIn)
         }
 
     @Test

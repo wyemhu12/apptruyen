@@ -33,6 +33,7 @@ import java.util.Locale
 @Composable
 fun SettingsScreen(
     onNavigateToStats: () -> Unit = {},
+    onNavigateToSourceLogin: (String) -> Unit = {},
     viewModel: SettingsViewModel = hiltViewModel(),
 ) {
     val state by viewModel.state.collectAsState()
@@ -210,6 +211,34 @@ fun SettingsScreen(
                         currentTheme = state.theme,
                         onThemeChange = { viewModel.setTheme(it) },
                     )
+
+                    HorizontalDivider(
+                        modifier = Modifier.padding(horizontal = 16.dp),
+                        color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.3f),
+                    )
+
+                    // Pokemon lookup dictionary toggle
+                    Row(
+                        modifier =
+                            Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 20.dp, vertical = 8.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("Từ điển Pokémon", style = MaterialTheme.typography.bodyMedium)
+                            Text(
+                                "Gạch chân tên Pokémon trong truyện, chạm để xem ảnh và hệ",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                        Switch(
+                            checked = state.pokemonLookupEnabled,
+                            onCheckedChange = { viewModel.setPokemonLookupEnabled(it) },
+                        )
+                    }
                 }
             }
 
@@ -389,7 +418,44 @@ fun SettingsScreen(
                 }
             }
 
-            // ── Tải trước chương ──
+            // ── Tài khoản nguồn truyện ──
+            item {
+                SettingsSection(title = "Tài khoản nguồn truyện", icon = Icons.Default.AccountCircle) {
+                    Row(
+                        modifier =
+                            Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 20.dp, vertical = 8.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("Wikidich", style = MaterialTheme.typography.bodyMedium)
+                            Text(
+                                if (state.isWikidichLoggedIn) {
+                                    "Đã đăng nhập"
+                                } else {
+                                    "Chưa đăng nhập (cần thiết khi lọc/tìm kiếm)"
+                                },
+                                style = MaterialTheme.typography.bodySmall,
+                                color =
+                                    if (state.isWikidichLoggedIn) {
+                                        MaterialTheme.colorScheme.primary
+                                    } else {
+                                        MaterialTheme.colorScheme.onSurfaceVariant
+                                    },
+                            )
+                        }
+                        FilledTonalButton(
+                            onClick = { onNavigateToSourceLogin("wikidich") },
+                            shape = RoundedCornerShape(12.dp),
+                        ) {
+                            Text(if (state.isWikidichLoggedIn) "Quản lý" else "Đăng nhập")
+                        }
+                    }
+                }
+            }
+
             item {
                 SettingsSection(title = "Tải trước chương", icon = Icons.Default.CloudDownload) {
                     Text(

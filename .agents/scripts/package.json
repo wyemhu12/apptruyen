@@ -1,0 +1,5 @@
+{
+  "type": "module",
+  "private": true,
+  "description": "AppTruyen agent governance scripts (Code Freeze Guard). Tests: node --test .agents/scripts/code-freeze-guard.test.js"
+}

@@ -24,12 +24,15 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.unit.dp
+import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
+import com.personal.apptruyen.ui.auth.SourceLoginScreen
+import com.personal.apptruyen.ui.auth.SourceLoginViewModel
 import com.personal.apptruyen.ui.detail.StoryDetailScreen
 import com.personal.apptruyen.ui.downloads.DownloadsScreen
 import com.personal.apptruyen.ui.explore.ExploreScreen
@@ -83,6 +86,10 @@ sealed class Screen(
     data object Settings : Screen("settings")
 
     data object ReadingStats : Screen("reading_stats")
+
+    data object SourceLogin : Screen("source_login/{sourceId}") {
+        fun createRoute(sourceId: String = "wikidich"): String = "source_login/$sourceId"
+    }
 }
 
 data class BottomNavItem(
@@ -236,6 +243,9 @@ private fun AppNavContent(
                 onSearchClick = {
                     navController.navigate(Screen.Search.createRoute())
                 },
+                onNavigateToSourceLogin = { sourceId ->
+                    navController.navigate(Screen.SourceLogin.createRoute(sourceId))
+                },
             )
         }
 
@@ -265,6 +275,9 @@ private fun AppNavContent(
                     navController.navigate(Screen.StoryDetail.createRoute(id, url))
                 },
                 initialQuery = query,
+                onNavigateToSourceLogin = { sourceId ->
+                    navController.navigate(Screen.SourceLogin.createRoute(sourceId))
+                },
             )
         }
 
@@ -325,6 +338,34 @@ private fun AppNavContent(
                 onNavigateToStats = {
                     navController.navigate(Screen.ReadingStats.route)
                 },
+                onNavigateToSourceLogin = { sourceId ->
+                    navController.navigate(Screen.SourceLogin.createRoute(sourceId))
+                },
+            )
+        }
+
+        composable(
+            route = Screen.SourceLogin.route,
+            arguments =
+                listOf(
+                    navArgument("sourceId") {
+                        type = NavType.StringType
+                        defaultValue = "wikidich"
+                    },
+                ),
+            enterTransition = {
+                slideInHorizontally(tween(350)) { it / 3 } + fadeIn(tween(300))
+            },
+            exitTransition = { fadeOut(tween(200)) },
+            popEnterTransition = { fadeIn(tween(250)) },
+            popExitTransition = {
+                slideOutHorizontally(tween(300)) { it / 3 } + fadeOut(tween(250))
+            },
+        ) {
+            val viewModel: SourceLoginViewModel = hiltViewModel()
+            SourceLoginScreen(
+                viewModel = viewModel,
+                onNavigateBack = { navController.popBackStack() },
             )
         }
 

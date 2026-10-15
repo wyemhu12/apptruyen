@@ -3,8 +3,7 @@ package com.personal.apptruyen.di
 import com.personal.apptruyen.data.remote.SsTruyenScraper
 import com.personal.apptruyen.data.remote.StorySource
 import com.personal.apptruyen.data.remote.TangThuVienScraper
-import com.personal.apptruyen.data.remote.TruyenComScraper
-import com.personal.apptruyen.data.remote.TruyenFullScraper
+import com.personal.apptruyen.data.remote.WikidichScraper
 import dagger.Binds
 import dagger.Module
 import dagger.hilt.InstallIn
@@ -20,10 +19,6 @@ abstract class ScraperModule {
 
     @Binds
     @IntoSet
-    abstract fun bindTruyenCom(impl: TruyenComScraper): StorySource
-
-    @Binds
-    @IntoSet
     abstract fun bindTangThuVien(impl: TangThuVienScraper): StorySource
 
     @Binds
@@ -32,5 +27,5 @@ abstract class ScraperModule {
 
     @Binds
     @IntoSet
-    abstract fun bindTruyenFull(impl: TruyenFullScraper): StorySource
+    abstract fun bindWikidich(impl: WikidichScraper): StorySource
 }

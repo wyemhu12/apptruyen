@@ -1,5 +1,7 @@
 {
   "dependencies": {
-    "@fontsource/be-vietnam-pro": "^5.2.8"
+    "@fontsource/be-vietnam-pro": "^5.2.8",
+    "crypto-js": "^4.2.0",
+    "jsdom": "^29.1.1"
   }
 }

@@ -41,6 +41,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         requestNotificationPermission()
+
         setContent {
             val themeMode by themeViewModel.appThemeMode.collectAsState()
             val dynamicColor by themeViewModel.dynamicColor.collectAsState()

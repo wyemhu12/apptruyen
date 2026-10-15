@@ -16,6 +16,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.AccountCircle
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.FilterList
 import androidx.compose.material.icons.filled.History
@@ -43,11 +44,13 @@ fun SearchScreen(
     onBack: () -> Unit,
     onStoryClick: (String, String) -> Unit,
     initialQuery: String = "",
+    onNavigateToSourceLogin: (String) -> Unit = {},
     viewModel: SearchViewModel = hiltViewModel(),
 ) {
     val state by viewModel.state.collectAsState()
     val recentSearches by viewModel.recentSearches.collectAsState()
     val searchSuggestions by viewModel.searchSuggestions.collectAsState()
+    val loginRequiredSources by viewModel.loginRequiredSources.collectAsState()
     val genres by viewModel.genres.collectAsState()
     var showFilterSheet by remember { mutableStateOf(false) }
     val listState = rememberLazyListState()
@@ -307,6 +310,72 @@ fun SearchScreen(
                             shape = RoundedCornerShape(20.dp),
                             modifier = Modifier.height(28.dp),
                         )
+                    }
+                }
+            }
+
+            // ─── Wikidich Login Required Banner ───
+            AnimatedVisibility(
+                visible = loginRequiredSources.contains("wikidich"),
+                enter = fadeIn() + expandVertically(),
+                exit = fadeOut() + shrinkVertically(),
+            ) {
+                Card(
+                    modifier =
+                        Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 6.dp),
+                    colors =
+                        CardDefaults.cardColors(
+                            containerColor = MaterialTheme.colorScheme.tertiaryContainer,
+                            contentColor = MaterialTheme.colorScheme.onTertiaryContainer,
+                        ),
+                    shape = RoundedCornerShape(12.dp),
+                ) {
+                    Row(
+                        modifier = Modifier.padding(12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
+                        Icon(
+                            Icons.Default.AccountCircle,
+                            contentDescription = null,
+                            modifier = Modifier.size(24.dp),
+                            tint = MaterialTheme.colorScheme.tertiary,
+                        )
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                "Wikidich yêu cầu đăng nhập",
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.Bold,
+                            )
+                            Text(
+                                "Đăng nhập tài khoản Wikidich để xem đầy đủ kết quả tìm kiếm.",
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                        }
+                        Button(
+                            onClick = { onNavigateToSourceLogin("wikidich") },
+                            colors =
+                                ButtonDefaults.buttonColors(
+                                    containerColor = MaterialTheme.colorScheme.tertiary,
+                                    contentColor = MaterialTheme.colorScheme.onTertiary,
+                                ),
+                            shape = RoundedCornerShape(8.dp),
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+                        ) {
+                            Text("Đăng nhập", style = MaterialTheme.typography.labelMedium)
+                        }
+                        IconButton(
+                            onClick = { viewModel.dismissLoginPrompt("wikidich") },
+                            modifier = Modifier.size(28.dp),
+                        ) {
+                            Icon(
+                                Icons.Default.Clear,
+                                contentDescription = "Đóng",
+                                modifier = Modifier.size(16.dp),
+                            )
+                        }
                     }
                 }
             }

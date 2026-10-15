@@ -1,9 +1,10 @@
 package com.personal.apptruyen.data.local
 
-import androidx.room.Database
-import androidx.room.RoomDatabase
-import androidx.room.migration.Migration
-import androidx.sqlite.db.SupportSQLiteDatabase
+import androidx.room3.Database
+import androidx.room3.RoomDatabase
+import androidx.room3.migration.Migration
+import androidx.sqlite.SQLiteConnection
+import androidx.sqlite.execSQL
 import com.personal.apptruyen.data.local.entity.ChapterEntity
 import com.personal.apptruyen.data.local.entity.ReadingProgressEntity
 import com.personal.apptruyen.data.local.entity.ReadingStatsEntity
@@ -21,6 +22,7 @@ import com.personal.apptruyen.data.local.entity.StoryEntity
     version = 9,
     exportSchema = true,
 )
+@Suppress("NO_DATABASE_CONSTRUCTOR")
 abstract class AppDatabase : RoomDatabase() {
     abstract fun storyDao(): StoryDao
 
@@ -36,8 +38,8 @@ abstract class AppDatabase : RoomDatabase() {
         /** Migration v5→v6: Add reading_stats table */
         val MIGRATION_5_6 =
             object : Migration(5, 6) {
-                override fun migrate(db: SupportSQLiteDatabase) {
-                    db.execSQL(
+                override suspend fun migrate(connection: SQLiteConnection) {
+                    connection.execSQL(
                         """
                         CREATE TABLE IF NOT EXISTS reading_stats (
                             date TEXT NOT NULL PRIMARY KEY,
@@ -53,25 +55,25 @@ abstract class AppDatabase : RoomDatabase() {
         /** Migration v6→v7: Add sourceId column to stories table */
         val MIGRATION_6_7 =
             object : Migration(6, 7) {
-                override fun migrate(db: SupportSQLiteDatabase) {
-                    db.execSQL("ALTER TABLE stories ADD COLUMN sourceId TEXT NOT NULL DEFAULT 'truyencom'")
+                override suspend fun migrate(connection: SQLiteConnection) {
+                    connection.execSQL("ALTER TABLE stories ADD COLUMN sourceId TEXT NOT NULL DEFAULT 'truyencom'")
                 }
             }
 
         /** Migration v7→v8: Add status column to stories table */
         val MIGRATION_7_8 =
             object : Migration(7, 8) {
-                override fun migrate(db: SupportSQLiteDatabase) {
-                    db.execSQL("ALTER TABLE stories ADD COLUMN status TEXT NOT NULL DEFAULT ''")
+                override suspend fun migrate(connection: SQLiteConnection) {
+                    connection.execSQL("ALTER TABLE stories ADD COLUMN status TEXT NOT NULL DEFAULT ''")
                 }
             }
 
         /** Migration v8→v9: Add per-story text replacement columns */
         val MIGRATION_8_9 =
             object : Migration(8, 9) {
-                override fun migrate(db: SupportSQLiteDatabase) {
-                    db.execSQL("ALTER TABLE stories ADD COLUMN storyReplacementsEnabled INTEGER NOT NULL DEFAULT 0")
-                    db.execSQL("ALTER TABLE stories ADD COLUMN storyCustomReplacements TEXT NOT NULL DEFAULT ''")
+                override suspend fun migrate(connection: SQLiteConnection) {
+                    connection.execSQL("ALTER TABLE stories ADD COLUMN storyReplacementsEnabled INTEGER NOT NULL DEFAULT 0")
+                    connection.execSQL("ALTER TABLE stories ADD COLUMN storyCustomReplacements TEXT NOT NULL DEFAULT ''")
                 }
             }
     }

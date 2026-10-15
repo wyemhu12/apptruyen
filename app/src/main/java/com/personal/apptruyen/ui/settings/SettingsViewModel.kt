@@ -8,7 +8,9 @@ import androidx.datastore.preferences.core.edit
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.personal.apptruyen.data.local.SettingsKeys
+import com.personal.apptruyen.data.local.SourceIds
 import com.personal.apptruyen.data.repository.BackupRepository
+import com.personal.apptruyen.data.repository.ISourceAuthRepository
 import com.personal.apptruyen.util.CrashHandler
 import com.personal.apptruyen.util.TextReplacementHelper
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -70,6 +72,7 @@ class SettingsViewModel
     constructor(
         private val dataStore: DataStore<Preferences>,
         private val backupRepository: BackupRepository,
+        private val authRepository: ISourceAuthRepository,
     ) : ViewModel() {
 
         data class SettingsState(
@@ -82,50 +85,59 @@ class SettingsViewModel
             val dynamicColor: Boolean = true,
             val textReplacementEnabled: Boolean = true,
             val autoFormatEnabled: Boolean = true,
+            val pokemonLookupEnabled: Boolean = true,
             val customReplacements: ImmutableList<Pair<String, String>> = persistentListOf(),
             val enabledSources: Set<String> = ALL_SOURCES,
             val prefetchChapters: Int = 0,
+            val isWikidichLoggedIn: Boolean = false,
         )
 
         companion object {
-            /** Tất cả nguồn. Key phải khớp với StorySource.sourceId */
-            val ALL_SOURCES = setOf("truyencom", "tangthuvien", "sstruyen", "truyenfull")
-            val SOURCE_LABELS =
-                mapOf(
-                    "truyencom" to "TruyenCom",
-                    "tangthuvien" to "TàngThưViện",
-                    "sstruyen" to "SsTruyện",
-                    "truyenfull" to "TruyenFull",
-                )
+            /** Tất cả nguồn đang hoạt động. Key phải khớp với StorySource.sourceId */
+            val ALL_SOURCES = SourceIds.ALL_ACTIVE_SOURCES
+            val SOURCE_LABELS = SourceIds.SOURCE_LABELS
+        }
+
+        private val isWikidichLoggedInFlow = MutableStateFlow(false)
+
+        init {
+            checkAuthStatus()
+        }
+
+        fun checkAuthStatus() {
+            viewModelScope.launch {
+                isWikidichLoggedInFlow.value = authRepository.isLoggedIn(SourceIds.WIKIDICH)
+            }
         }
 
         val state: StateFlow<SettingsState> =
-            dataStore.data
-                .map { prefs ->
-                    SettingsState(
-                        ttsSpeed = prefs[SettingsKeys.TTS_SPEED] ?: 1.0f,
-                        ttsPitch = prefs[SettingsKeys.TTS_PITCH] ?: 1.0f,
-                        ttsVoice = prefs[SettingsKeys.TTS_VOICE] ?: "",
-                        fontSize = prefs[SettingsKeys.FONT_SIZE] ?: 18f,
-                        theme = ReaderThemeOption.fromValue(prefs[SettingsKeys.THEME] ?: 0),
-                        appThemeMode = AppThemeMode.fromValue(prefs[SettingsKeys.APP_THEME_MODE] ?: 0),
-                        dynamicColor = prefs[SettingsKeys.DYNAMIC_COLOR] ?: true,
-                        textReplacementEnabled = prefs[SettingsKeys.TEXT_REPLACEMENT_ENABLED] ?: true,
-                        autoFormatEnabled = prefs[SettingsKeys.AUTO_FORMAT_ENABLED] ?: true,
-                        customReplacements =
-                            TextReplacementHelper
-                                .parseCustomReplacements(
-                                    prefs[SettingsKeys.CUSTOM_REPLACEMENTS],
-                                ).toImmutableList(),
-                        enabledSources =
-                            prefs[SettingsKeys.ENABLED_SOURCES]
-                                ?.split(",")
-                                ?.filter { it.isNotBlank() }
-                                ?.toSet()
-                                ?: ALL_SOURCES,
-                        prefetchChapters = prefs[SettingsKeys.PREFETCH_CHAPTERS] ?: 0,
-                    )
-                }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), SettingsState())
+            combine(dataStore.data, isWikidichLoggedInFlow) { prefs, isWikidichLoggedIn ->
+                SettingsState(
+                    ttsSpeed = prefs[SettingsKeys.TTS_SPEED] ?: 1.0f,
+                    ttsPitch = prefs[SettingsKeys.TTS_PITCH] ?: 1.0f,
+                    ttsVoice = prefs[SettingsKeys.TTS_VOICE] ?: "",
+                    fontSize = prefs[SettingsKeys.FONT_SIZE] ?: 18f,
+                    theme = ReaderThemeOption.fromValue(prefs[SettingsKeys.THEME] ?: 0),
+                    appThemeMode = AppThemeMode.fromValue(prefs[SettingsKeys.APP_THEME_MODE] ?: 0),
+                    dynamicColor = prefs[SettingsKeys.DYNAMIC_COLOR] ?: true,
+                    textReplacementEnabled = prefs[SettingsKeys.TEXT_REPLACEMENT_ENABLED] ?: true,
+                    autoFormatEnabled = prefs[SettingsKeys.AUTO_FORMAT_ENABLED] ?: true,
+                    pokemonLookupEnabled = prefs[SettingsKeys.POKEMON_LOOKUP_ENABLED] ?: true,
+                    customReplacements =
+                        TextReplacementHelper
+                            .parseCustomReplacements(
+                                prefs[SettingsKeys.CUSTOM_REPLACEMENTS],
+                            ).toImmutableList(),
+                    enabledSources =
+                        prefs[SettingsKeys.ENABLED_SOURCES]
+                            ?.split(",")
+                            ?.filter { it.isNotBlank() }
+                            ?.toSet()
+                            ?: ALL_SOURCES,
+                    prefetchChapters = prefs[SettingsKeys.PREFETCH_CHAPTERS] ?: 0,
+                    isWikidichLoggedIn = isWikidichLoggedIn,
+                )
+            }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), SettingsState())
 
         fun setTtsSpeed(speed: Float) {
             viewModelScope.launch {
@@ -178,6 +190,12 @@ class SettingsViewModel
         fun setAutoFormat(enabled: Boolean) {
             viewModelScope.launch {
                 dataStore.edit { it[SettingsKeys.AUTO_FORMAT_ENABLED] = enabled }
+            }
+        }
+
+        fun setPokemonLookupEnabled(enabled: Boolean) {
+            viewModelScope.launch {
+                dataStore.edit { it[SettingsKeys.POKEMON_LOOKUP_ENABLED] = enabled }
             }
         }
 

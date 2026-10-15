@@ -121,4 +121,46 @@ class TtsTextPreprocessorTest {
             TtsTextPreprocessor.preprocess("Mr. Bean là thành viên S.H.I.E.L.D"),
         )
     }
+
+    // ── Quotes and Separators ──
+
+    @Test
+    fun `removes quotation marks`() {
+        assertEquals(
+            "Xin chào, anh ấy nói.",
+            TtsTextPreprocessor.preprocess("“Xin chào”, anh ấy nói."),
+        )
+        assertEquals(
+            "Hello world",
+            TtsTextPreprocessor.preprocess("\"Hello world\""),
+        )
+    }
+
+    @Test
+    fun `removes separator lines`() {
+        assertEquals(
+            "Chương 1",
+            TtsTextPreprocessor.preprocess("--- Chương 1 ---"),
+        )
+        assertEquals(
+            "Phân cách",
+            TtsTextPreprocessor.preprocess("___ Phân cách ___"),
+        )
+        assertEquals(
+            "Đầu dòng",
+            TtsTextPreprocessor.preprocess("++++ Đầu dòng"),
+        )
+        assertEquals(
+            "Kết thúc",
+            TtsTextPreprocessor.preprocess("==== Kết thúc"),
+        )
+        assertEquals(
+            "Dấu sao",
+            TtsTextPreprocessor.preprocess("*** Dấu sao"),
+        )
+        assertEquals(
+            "Dấu ngã",
+            TtsTextPreprocessor.preprocess("~~~ Dấu ngã"),
+        )
+    }
 }

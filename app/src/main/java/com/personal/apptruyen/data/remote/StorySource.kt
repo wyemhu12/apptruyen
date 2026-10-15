@@ -1,6 +1,7 @@
 package com.personal.apptruyen.data.remote
 
 import com.personal.apptruyen.data.model.Chapter
+import com.personal.apptruyen.data.model.ChapterContentResult
 import com.personal.apptruyen.data.model.Genre
 import com.personal.apptruyen.data.model.Story
 
@@ -12,6 +13,7 @@ interface StorySource {
     val sourceId: String // e.g. "truyencom", "tangthuvien"
     val sourceName: String // e.g. "TruyenCom", "Tàng Thư Viện"
     val baseUrl: String // e.g. "https://truyencom.com"
+    val legacyHosts: List<String> get() = emptyList()
 
     /** Tìm truyện theo keyword, có thể lọc chỉ truyện đã hoàn thành */
     suspend fun search(
@@ -38,6 +40,13 @@ interface StorySource {
     /** Lấy nội dung chương */
     suspend fun getChapterContent(chapterUrl: String): String
 
+    /**
+     * Lấy nội dung chương kèm title thực (nếu có).
+     * Default: gọi getChapterContent() và wrap kết quả, title = null.
+     * Override cho nguồn không có title trong danh sách chương (ví dụ TTV).
+     */
+    suspend fun getChapterContentWithTitle(chapterUrl: String): ChapterContentResult = ChapterContentResult(content = getChapterContent(chapterUrl))
+
     /** Truyện hoàn thành mới nhất (phân trang) */
     suspend fun getCompletedStories(page: Int = 1): List<Story>
 
@@ -57,4 +66,34 @@ interface StorySource {
         val chapters: List<Chapter>,
         val totalPages: Int,
     )
+}
+
+/**
+ * Extension function để so khớp URL với nguồn truyện (hỗ trợ cả baseUrl và legacyHosts).
+ * So khớp host chuẩn xác qua java.net.URI loại bỏ cổng, hỗ trợ cả subdomain.
+ */
+fun StorySource.matchesUrl(url: String): Boolean {
+    val host =
+        runCatching {
+            java.net.URI(url).host
+                ?: url.substringAfter("://").substringBefore("/").substringBefore(":")
+        }.getOrDefault("").lowercase().substringBefore(":")
+
+    val baseHost =
+        baseUrl
+            .substringAfter("://")
+            .substringBefore("/")
+            .lowercase()
+            .substringBefore(":")
+    if (host == baseHost || host.endsWith(".$baseHost")) return true
+
+    return legacyHosts.any { legacy ->
+        val legHost =
+            legacy
+                .substringAfter("://")
+                .substringBefore("/")
+                .lowercase()
+                .substringBefore(":")
+        host == legHost || host.endsWith(".$legHost")
+    }
 }

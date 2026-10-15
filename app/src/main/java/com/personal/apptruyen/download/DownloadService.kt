@@ -12,6 +12,7 @@ import android.os.PowerManager
 import androidx.core.app.NotificationCompat
 import com.personal.apptruyen.MainActivity
 import com.personal.apptruyen.R
+import com.personal.apptruyen.data.remote.ScraperException
 import com.personal.apptruyen.data.repository.DownloadProgress
 import com.personal.apptruyen.data.repository.IDownloadRepository
 import com.personal.apptruyen.data.repository.IStoryRepository
@@ -61,6 +62,18 @@ class DownloadService : Service() {
         // Progress được shared qua static StateFlow — ViewModel observe từ bên ngoài
         private val _downloadState = MutableStateFlow<DownloadState>(DownloadState.Idle)
         val downloadState: StateFlow<DownloadState> = _downloadState.asStateFlow()
+
+        internal fun buildCompletionText(
+            downloaded: Int,
+            errors: Int,
+            loginRequired: Boolean = false,
+        ): String =
+            when {
+                loginRequired ->
+                    "Đã tải $downloaded chương. Phiên đăng nhập đã hết hạn, vui lòng đăng nhập lại để tải tiếp."
+                errors > 0 -> "Đã tải $downloaded chương ($errors lỗi)"
+                else -> "Đã tải $downloaded chương thành công"
+            }
 
         fun startDownload(
             context: Context,
@@ -166,6 +179,7 @@ class DownloadService : Service() {
 
         downloadJob =
             serviceScope.launch {
+                var lastProgress: DownloadProgress? = null
                 try {
                     storyRepository.addToLibrary(storyId)
 
@@ -181,7 +195,6 @@ class DownloadService : Service() {
                         return@launch
                     }
 
-                    var lastProgress: DownloadProgress? = null
                     downloadRepository.downloadChapters(storyId, allChapters).collect { progress ->
                         lastProgress = progress
                         _downloadState.value = DownloadState.Downloading(storyId, storyTitle, progress)
@@ -209,10 +222,18 @@ class DownloadService : Service() {
                 } catch (e: CancellationException) {
                     // User hủy — đã xử lý trong cancelCurrentDownload
                     throw e
+                } catch (e: ScraperException.LoginRequiredException) {
+                    Timber.w(e, "Download stopped: login required")
+                    val downloaded = lastProgress?.current ?: 0
+                    val errors = (lastProgress?.errors ?: 0).coerceAtLeast(1)
+                    _downloadState.value = DownloadState.Completed(storyId, storyTitle, downloaded, errors)
+                    sendCompletionNotification(storyTitle, downloaded, errors, loginRequired = true)
                 } catch (e: Exception) {
                     Timber.e(e, "Download failed")
-                    _downloadState.value = DownloadState.Completed(storyId, storyTitle, 0, 1)
-                    sendCompletionNotification(storyTitle, 0, 1)
+                    val downloaded = lastProgress?.current ?: 0
+                    val errors = (lastProgress?.errors ?: 0).coerceAtLeast(1)
+                    _downloadState.value = DownloadState.Completed(storyId, storyTitle, downloaded, errors)
+                    sendCompletionNotification(storyTitle, downloaded, errors)
                 } finally {
                     stopSelfCleanly()
                 }
@@ -322,8 +343,9 @@ class DownloadService : Service() {
         storyTitle: String,
         downloaded: Int,
         errors: Int,
+        loginRequired: Boolean = false,
     ) {
-        val text = if (errors > 0) "Đã tải $downloaded chương ($errors lỗi)" else "Đã tải $downloaded chương thành công"
+        val text = buildCompletionText(downloaded, errors, loginRequired)
         val nm = getSystemService(NotificationManager::class.java)
         nm.notify(
             storyTitle.hashCode(),
