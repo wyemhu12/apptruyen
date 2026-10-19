@@ -1,6 +1,5 @@
 package com.personal.apptruyen.data.remote
 
-import android.util.Log
 import com.personal.apptruyen.data.model.Chapter
 import com.personal.apptruyen.data.model.ChapterContentResult
 import com.personal.apptruyen.data.model.Genre
@@ -12,6 +11,7 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import timber.log.Timber
 import java.net.URLEncoder
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -28,7 +28,12 @@ class TangThuVienScraper
 
         override val sourceId = "tangthuvien"
         override val sourceName = "Tàng Thư Viện"
-        override val baseUrl = BASE_URL
+
+        @androidx.annotation.VisibleForTesting
+        internal var customBaseUrl: String? = null
+
+        override val baseUrl: String
+            get() = customBaseUrl ?: BASE_URL
 
         // New TTV can use mobile or desktop UA
         override val userAgent = DEFAULT_MOBILE_UA
@@ -37,7 +42,7 @@ class TangThuVienScraper
         override fun buildExtraHeaders(builder: Request.Builder) {
             builder
                 .header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
-                .header("Referer", "$BASE_URL/")
+                .header("Referer", "$baseUrl/")
         }
 
         companion object {
@@ -157,7 +162,7 @@ class TangThuVienScraper
             withContext(Dispatchers.IO) {
                 val encoded = URLEncoder.encode(keyword, "UTF-8")
                 val statusParam = if (completedOnly) "&status=COMPLETED" else ""
-                val url = "$BASE_URL/truyen?keyword=$encoded$statusParam"
+                val url = "$baseUrl/truyen?keyword=$encoded$statusParam"
                 val doc = fetchDocumentWithRetry(url)
                 enrichWithChapterCounts(parseStoryList(doc))
             }
@@ -208,11 +213,17 @@ class TangThuVienScraper
                         }?.let {
                             val src = it.attr("abs:src").ifEmpty { it.attr("src") }
                             // NextJS image optimization URL parsing
-                            if (src.startsWith("/_next/image?url=")) {
-                                java.net.URLDecoder.decode(src.substringAfter("url=").substringBefore("&"), "UTF-8")
-                            } else {
-                                src
-                            }
+                            val decoded =
+                                if (src.contains("/_next/image?url=")) {
+                                    java.net.URLDecoder.decode(
+                                        src.substringAfter("/_next/image?url=").substringBefore("&"),
+                                        "UTF-8",
+                                    )
+                                } else {
+                                    src
+                                }
+                            val absolute = if (decoded.startsWith("/")) "$baseUrl$decoded" else decoded
+                            validateCoverUrl(absolute)
                         } ?: ""
 
                 // Extract total chapters from text like "241 Chương"
@@ -235,7 +246,7 @@ class TangThuVienScraper
                 val slug = extractSlug(urlToFetch)
 
                 Story(
-                    id = slug,
+                    id = "${sourceId}_$slug",
                     slug = slug,
                     title = title,
                     author = author,
@@ -277,13 +288,14 @@ class TangThuVienScraper
             total: Int,
         ): List<Chapter> {
             val chapters = mutableListOf<Chapter>()
+            val canonicalStoryId = "${sourceId}_$slug"
             for (i in 1..total) {
                 chapters.add(
                     Chapter(
-                        storyId = slug,
+                        storyId = canonicalStoryId,
                         chapterNumber = i,
                         title = "Chương $i", // Dummy title until fetched
-                        url = "$BASE_URL/$slug/$i",
+                        url = "$baseUrl/$slug/$i",
                     ),
                 )
             }
@@ -353,8 +365,9 @@ class TangThuVienScraper
                 } catch (e: ScraperException) {
                     throw e
                 } catch (e: Exception) {
-                    Log.d("TTVScraper", "Failed to load chapter: $chapterUrl", e)
-                    throw ScraperException.ParseException("Không thể tải nội dung chương: ${e.message}", chapterUrl)
+                    if (e is kotlinx.coroutines.CancellationException) throw e
+                    Timber.tag("TTVScraper").d(e, "Failed to load chapter: %s", chapterUrl)
+                    throw ScraperException.ParseException("Không thể tải nội dung chương", chapterUrl, e)
                 }
             }
 
@@ -362,7 +375,7 @@ class TangThuVienScraper
 
         override suspend fun getCompletedStories(page: Int): List<Story> =
             withContext(Dispatchers.IO) {
-                val url = "$BASE_URL/truyen?status=COMPLETED&sort=createdAt&order=desc&page=$page"
+                val url = "$baseUrl/truyen?status=COMPLETED&sort=createdAt&order=desc&page=$page"
                 val doc = fetchDocumentWithRetry(url)
                 parseStoryList(doc)
             }
@@ -377,7 +390,7 @@ class TangThuVienScraper
         ): List<Story> =
             withContext(Dispatchers.IO) {
                 val statusParam = if (completedOnly) "&status=COMPLETED" else ""
-                val url = "$BASE_URL/truyen?genre=$genreSlug&page=$page$statusParam"
+                val url = "$baseUrl/truyen?genre=$genreSlug&page=$page$statusParam"
                 val doc = fetchDocumentWithRetry(url)
                 val stories = enrichWithChapterCounts(parseStoryList(doc))
 
@@ -394,7 +407,7 @@ class TangThuVienScraper
             withContext(Dispatchers.IO) {
                 // Fetch từ trang /truyen vì trang chủ render client-side (Next.js),
                 // Jsoup không thấy genre links. Trang /truyen có SSR sẵn danh sách thể loại.
-                val doc = fetchDocumentWithRetry("$BASE_URL/truyen")
+                val doc = fetchDocumentWithRetry("$baseUrl/truyen")
                 val genres = mutableListOf<Genre>()
 
                 // Link có dạng ?genre=khoa-huyen hoặc href chứa genre=
@@ -438,10 +451,17 @@ class TangThuVienScraper
                     if (title.isBlank()) return@forEach
 
                     val slug = extractSlug(href)
-                    var coverUrl = img.attr("abs:src").ifEmpty { img.attr("src") }
-                    if (coverUrl.startsWith("/_next/image?url=")) {
-                        coverUrl = java.net.URLDecoder.decode(coverUrl.substringAfter("url=").substringBefore("&"), "UTF-8")
-                    }
+                    val rawCover = img.attr("abs:src").ifEmpty { img.attr("src") }
+                    val decodedCover =
+                        if (rawCover.contains("/_next/image?url=")) {
+                            java.net.URLDecoder.decode(
+                                rawCover.substringAfter("/_next/image?url=").substringBefore("&"),
+                                "UTF-8",
+                            )
+                        } else {
+                            rawCover
+                        }
+                    val coverUrl = validateCoverUrl(if (decodedCover.startsWith("/")) "$baseUrl$decodedCover" else decodedCover)
 
                     // Parse chapter count if available in container
                     val textContent = container.text()
@@ -459,13 +479,13 @@ class TangThuVienScraper
 
                     results.add(
                         Story(
-                            id = slug,
+                            id = "${sourceId}_$slug",
                             slug = slug,
                             title = title,
                             author = author, // Extracted from container
                             genres = emptyList(),
                             description = "",
-                            url = "$BASE_URL$href",
+                            url = "$baseUrl$href",
                             totalChapters = totalChapters,
                             coverImageUrl = coverUrl,
                             sourceId = sourceId,
@@ -507,7 +527,8 @@ class TangThuVienScraper
                                                     ?.toIntOrNull() ?: 0
                                             story.id to count
                                         } catch (e: Exception) {
-                                            Log.d("TTVScraper", "Enrich failed for ${story.id}: ${e.message}")
+                                            if (e is kotlinx.coroutines.CancellationException) throw e
+                                            Timber.tag("TTVScraper").d("Enrich failed for %s: %s", story.id, e.message)
                                             story.id to 0
                                         }
                                     }
@@ -519,7 +540,8 @@ class TangThuVienScraper
                     }
                 }
             } catch (e: Exception) {
-                Log.d("TTVScraper", "Enrich timeout/error: ${e.message}")
+                if (e is kotlinx.coroutines.CancellationException) throw e
+                Timber.tag("TTVScraper").d("Enrich timeout/error: %s", e.message)
             }
 
             return stories.map { story ->
@@ -535,7 +557,14 @@ class TangThuVienScraper
         private fun extractSlug(url: String): String {
             // URL có thể là https://tangthuvien.org/slug hoặc /slug
             // Hoặc url cũ: https://truyen.tangthuvien.vn/doc-truyen/slug
-            val path = url.trimEnd('/').substringAfter("/doc-truyen/").substringAfter("tangthuvien.org/")
+            val normalizedBase = baseUrl.trimEnd('/')
+            val path =
+                url
+                    .trimEnd('/')
+                    .removePrefix("$normalizedBase/")
+                    .substringAfter("/doc-truyen/")
+                    .substringAfter("tangthuvien.org/")
+                    .removePrefix("/")
             return path.substringBefore("/").substringBefore("?").ifBlank { path.replace("/", "") }
         }
 
@@ -549,13 +578,13 @@ class TangThuVienScraper
 
                 return if (chapterPart != null && chapterPart.startsWith("chuong-")) {
                     val chapterNum = chapterPart.replace("chuong-", "")
-                    "$BASE_URL/$slug/$chapterNum"
+                    "$baseUrl/$slug/$chapterNum"
                 } else {
-                    "$BASE_URL/$slug"
+                    "$baseUrl/$slug"
                 }
             }
             if (oldUrl.startsWith("/")) {
-                return "$BASE_URL$oldUrl"
+                return "$baseUrl$oldUrl"
             }
             return oldUrl
         }

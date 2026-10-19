@@ -1,4 +1,7 @@
-# Giải mã nội dung truyện trên LacaTruyen (lacatruyen.buzz)
+# Giải mã nội dung truyện trên LacaTruyen (lacatruyen.buzz) — Tư liệu lịch sử
+
+> [!NOTE]
+> Nguồn truyện LacaTruyen (`lacatruyen.buzz`) và class giải mã `CryptoJS.kt` đã được gỡ bỏ khỏi codebase trong **Audit Remediation Phase 4 (2026-10-19)**. Tài liệu này được lưu giữ làm tư liệu kỹ thuật lịch sử.
 
 Tài liệu này ghi chú lại quá trình reverse engineer và phân tích thuật toán mã hóa AES nhiều lớp (multi-layered AES encryption) của LacaTruyen. Thuật toán này được phát hiện nhằm ngăn chặn các scraper và chỉ cho phép frontend React (Next.js) hiển thị chữ hợp lệ trên trình duyệt.
 
@@ -47,7 +50,6 @@ Mỗi URL trang truyện chứa một thẻ `<script id="__NEXT_DATA__">`. Trong
 - Cuối cùng, dùng `final_key` để giải mã biến `chapter.content`.
 - Chuỗi trả về chính là HTML chuẩn, có chứa các thẻ `<p>` hiển thị toàn bộ nội dung chương truyện rõ ràng bằng tiếng Việt.
 
-## Triển khai trên Android (Kotlin)
-- Do tính chất mã hóa tự thiết kế của AES (Salted__ header format của CryptoJS), việc ánh xạ và giả lập lại hàm `getGlobalKey()` và chuỗi giải mã liên hoàn trên Kotlin đòi hỏi sử dụng hàm AES chuẩn hoặc qua thư viện CryptoJS đã port sang Kotlin (như class `CryptoJS` hiện có trong codebase).
+## Triển khai trên Android (Kotlin — Đã gỡ bỏ)
+- Do tính chất mã hóa tự thiết kế của AES (Salted__ header format của CryptoJS), việc ánh xạ và giả lập lại hàm `getGlobalKey()` và chuỗi giải mã liên hoàn trên Kotlin từng được triển khai qua class `CryptoJS.kt` (đã được xóa trong Phase 4 khi dọn dẹp dead code của nguồn cũ LacaTruyen).
 - Triển khai Native cho phép Bypass hoàn toàn WebView, tăng tốc độ render (do JSON lấy về có thể decode ngay trong vài milisecond so với 5-10s chờ WebView).
-- Vẫn giữ nguyên fallback qua `WebViewContentFetcher` phòng hờ tương lai LacaTruyen update lại luồng mã hóa.

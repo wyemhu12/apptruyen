@@ -2,7 +2,6 @@ package com.personal.apptruyen.ui.components
 
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.background
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
@@ -16,23 +15,18 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import com.personal.apptruyen.ui.theme.*
 
 @Composable
 fun shimmerBrush(
     targetValue: Float = 1000f,
     colors: List<Color> =
-        if (isSystemInDarkTheme()) {
+        run {
+            val baseColor = MaterialTheme.colorScheme.surfaceVariant
+            val highlightColor = MaterialTheme.colorScheme.surfaceContainerHigh
             listOf(
-                ShimmerBaseDark,
-                ShimmerHighlightDark,
-                ShimmerBaseDark,
-            )
-        } else {
-            listOf(
-                ShimmerBaseLight,
-                ShimmerHighlightLight,
-                ShimmerBaseLight,
+                baseColor.copy(alpha = 0.7f),
+                highlightColor.copy(alpha = 0.95f),
+                baseColor.copy(alpha = 0.7f),
             )
         },
 ): Brush {

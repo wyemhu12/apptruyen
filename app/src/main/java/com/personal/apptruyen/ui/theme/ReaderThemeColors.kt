@@ -1,6 +1,5 @@
 package com.personal.apptruyen.ui.theme
 
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.remember
@@ -24,32 +23,27 @@ data class ReaderThemeColors(
 
 /**
  * Remember reader colors based on current theme.
- * Dùng @Composable vì cần MaterialTheme.colorScheme cho Light theme.
+ * Độc lập với Dark/Light Mode của hệ thống để đảm bảo độ tương phản WCAG AA (> 4.5:1) trên cả 3 nền đọc.
  */
 @Composable
-fun rememberReaderThemeColors(theme: ReaderViewModel.ReaderTheme): ReaderThemeColors {
-    val primaryColor = MaterialTheme.colorScheme.primary
-    val primaryContainer = MaterialTheme.colorScheme.primaryContainer
-    val surfaceColor = MaterialTheme.colorScheme.surface
-    val onSurfaceColor = MaterialTheme.colorScheme.onSurface
-
-    return remember(theme, primaryColor, surfaceColor) {
+fun rememberReaderThemeColors(theme: ReaderViewModel.ReaderTheme): ReaderThemeColors =
+    remember(theme) {
         when (theme) {
             ReaderViewModel.ReaderTheme.LIGHT ->
                 ReaderThemeColors(
-                    backgroundColor = Color.White,
-                    textColor = Color(0xFF1C1B1F),
-                    accentColor = primaryColor,
-                    panelBackground = surfaceColor,
-                    panelContentColor = onSurfaceColor,
-                    highlightBackground = primaryContainer,
-                    highlightText = primaryColor,
+                    backgroundColor = BackgroundLight,
+                    textColor = Color(0xFF1A1A1A),
+                    accentColor = Color(0xFF8B5000),
+                    panelBackground = Surface1Light,
+                    panelContentColor = OnSurfaceLight,
+                    highlightBackground = Color(0xFFFFF3CD),
+                    highlightText = Color(0xFF5D3A00),
                 )
             ReaderViewModel.ReaderTheme.DARK ->
                 ReaderThemeColors(
                     backgroundColor = Color(0xFF1C1B1F),
-                    textColor = Color(0xFFE6E1E5),
-                    accentColor = Color(0xFF90CAF9),
+                    textColor = Color(0xFFF0ECF0),
+                    accentColor = PrimaryDark,
                     panelBackground = Color(0xFF252525),
                     panelContentColor = Color(0xFFF0ECF0),
                     highlightBackground = Color(0xFF3A3000),
@@ -59,12 +53,11 @@ fun rememberReaderThemeColors(theme: ReaderViewModel.ReaderTheme): ReaderThemeCo
                 ReaderThemeColors(
                     backgroundColor = SepiaBackground,
                     textColor = SepiaText,
-                    accentColor = Color(0xFF8D6E3F),
+                    accentColor = Color(0xFF7A4510),
                     panelBackground = SepiaBackground,
                     panelContentColor = SepiaText,
-                    highlightBackground = Color(0xFFD4B896),
-                    highlightText = Color(0xFF5D3A1A),
+                    highlightBackground = Color(0xFFD0B286),
+                    highlightText = SepiaText,
                 )
         }
     }
-}

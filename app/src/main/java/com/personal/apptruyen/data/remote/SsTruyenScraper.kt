@@ -383,7 +383,7 @@ class SsTruyenScraper
                 val description = descText ?: ogDesc.ifBlank { "" }
 
                 Story(
-                    id = slug,
+                    id = "${sourceId}_$slug",
                     slug = slug,
                     title = title,
                     author = author,
@@ -516,7 +516,7 @@ class SsTruyenScraper
                                 val chapterUrl = "$baseUrl/doc-truyen/$slug-$chapSlug-$id"
                                 chapters.add(
                                     Chapter(
-                                        storyId = slug,
+                                        storyId = "${sourceId}_$slug",
                                         chapterNumber = chapterNumber,
                                         title = name.ifBlank { "Chương $chapterNumber" },
                                         url = chapterUrl,
@@ -540,11 +540,12 @@ class SsTruyenScraper
                 // Fallback qua HTML
                 val fallbackDoc = doc ?: fetchDocumentWithRetry(normalizedUrl)
                 val seen = mutableSetOf<Int>()
+                val canonicalStoryId = "${sourceId}_$slug"
                 val chapters =
                     parseChapterLinks(fallbackDoc, slug)
                         .filter { seen.add(it.number) }
                         .sortedBy { it.number }
-                        .map { it.toChapter(slug) }
+                        .map { it.toChapter(canonicalStoryId) }
 
                 val totalPages = getTotalChapterPages(fallbackDoc, normalizedUrl)
                 StorySource.FirstPageResult(chapters = chapters, totalPages = totalPages)
@@ -619,7 +620,7 @@ class SsTruyenScraper
                                         val chapterUrl = "$baseUrl/doc-truyen/$slug-$chapSlug-$id"
                                         batch.add(
                                             Chapter(
-                                                storyId = slug,
+                                                storyId = "${sourceId}_$slug",
                                                 chapterNumber = chapterNumber,
                                                 title = name.ifBlank { "Chương $chapterNumber" },
                                                 url = chapterUrl,
@@ -837,7 +838,7 @@ class SsTruyenScraper
 
                     results.add(
                         Story(
-                            id = slug,
+                            id = "${sourceId}_$slug",
                             slug = slug,
                             title = title,
                             author = author,
@@ -922,7 +923,7 @@ class SsTruyenScraper
 
                 results.add(
                     Story(
-                        id = slug,
+                        id = "${sourceId}_$slug",
                         slug = slug,
                         title = title,
                         author = author,
@@ -978,7 +979,7 @@ class SsTruyenScraper
 
                     results.add(
                         Story(
-                            id = slug,
+                            id = "${sourceId}_$slug",
                             slug = slug,
                             title = title,
                             genres = genres,

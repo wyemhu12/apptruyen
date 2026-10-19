@@ -43,6 +43,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.personal.apptruyen.data.remote.WebViewContentLoader
 
 @OptIn(ExperimentalMaterial3Api::class)
 @SuppressLint("SetJavaScriptEnabled")
@@ -172,8 +173,9 @@ fun SourceLoginScreen(
                                             request: WebResourceRequest?,
                                         ): Boolean {
                                             val uri = request?.url ?: return false
-                                            val host = uri.host.orEmpty()
-                                            val allowed = config.allowlistHosts.any { host.contains(it, ignoreCase = true) }
+                                            val scheme = uri.scheme?.lowercase() ?: ""
+                                            if (scheme != "http" && scheme != "https") return true
+                                            val allowed = WebViewContentLoader.isAllowedDomain(uri.host, config.allowlistHosts)
                                             return if (allowed) {
                                                 false
                                             } else {

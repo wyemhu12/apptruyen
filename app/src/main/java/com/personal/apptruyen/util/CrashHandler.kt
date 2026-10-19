@@ -15,7 +15,7 @@ import java.util.Locale
  * Custom UncaughtExceptionHandler — lưu crash logs vào file local.
  * Giữ tối đa [MAX_CRASH_FILES] file, tự xóa cũ nhất.
  */
-class CrashHandler private constructor(
+class CrashHandler internal constructor(
     private val context: Context,
     private val defaultHandler: Thread.UncaughtExceptionHandler?,
 ) : Thread.UncaughtExceptionHandler {
@@ -70,11 +70,16 @@ class CrashHandler private constructor(
     ) {
         try {
             saveCrashLog(throwable)
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to save crash log", e)
+        } catch (t: Throwable) {
+            try {
+                Log.e(TAG, "Failed to save crash log", t)
+            } catch (_: Throwable) {
+                // Ignore secondary logging failures during fatal crash
+            }
+        } finally {
+            // Delegate to default handler (shows system crash dialog / kills process)
+            defaultHandler?.uncaughtException(thread, throwable)
         }
-        // Delegate to default handler (shows system crash dialog / kills process)
-        defaultHandler?.uncaughtException(thread, throwable)
     }
 
     private fun saveCrashLog(throwable: Throwable) {

@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.MenuBook
 import androidx.compose.material.icons.filled.*
@@ -33,10 +34,30 @@ internal fun ChapterListPanel(
     onDismiss: () -> Unit,
 ) {
     val chapterListState = rememberLazyListState()
+    var searchQuery by remember { mutableStateOf("") }
+
+    LaunchedEffect(visible) {
+        if (!visible) {
+            searchQuery = ""
+        }
+    }
+
+    val filteredChapters =
+        remember(chapters, searchQuery) {
+            val q = searchQuery.trim()
+            if (q.isEmpty()) {
+                chapters
+            } else {
+                chapters.filter { ch ->
+                    ch.chapterNumber.toString().contains(q) ||
+                        ch.title.contains(q, ignoreCase = true)
+                }
+            }
+        }
 
     // Auto-scroll to center the current chapter when panel opens or chapter changes
     LaunchedEffect(visible, currentChapterNumber) {
-        if (visible && chapters.isNotEmpty()) {
+        if (visible && searchQuery.isBlank() && chapters.isNotEmpty()) {
             val currentIndex = chapters.indexOfFirst { it.chapterNumber == currentChapterNumber }
             if (currentIndex >= 0) {
                 // Estimate visible items and scroll so current is centered
@@ -46,12 +67,13 @@ internal fun ChapterListPanel(
         }
     }
 
-    // Panel colors per theme â€” centralized in ReaderThemeColors
+    // Panel colors per theme — centralized in ReaderThemeColors
     val themeColors = rememberReaderThemeColors(readerTheme)
     val panelBg = themeColors.panelBackground
     val panelContentColor = themeColors.panelContentColor
     val highlightBg = themeColors.highlightBackground
     val highlightText = themeColors.highlightText
+    val accentColor = themeColors.accentColor
 
     AnimatedVisibility(
         visible = visible,
@@ -59,7 +81,7 @@ internal fun ChapterListPanel(
         exit = fadeOut(tween(200)),
     ) {
         Box(modifier = Modifier.fillMaxSize()) {
-            // Scrim â€” tap to dismiss
+            // Scrim — tap to dismiss
             Box(
                 modifier =
                     Modifier
@@ -96,7 +118,7 @@ internal fun ChapterListPanel(
                     contentColor = panelContentColor,
                     shadowElevation = 16.dp,
                 ) {
-                    Column {
+                    Column(modifier = Modifier.safeDrawingPadding()) {
                         // Header
                         Row(
                             modifier =
@@ -120,50 +142,114 @@ internal fun ChapterListPanel(
                             )
                         }
 
+                        OutlinedTextField(
+                            value = searchQuery,
+                            onValueChange = { searchQuery = it },
+                            placeholder = {
+                                Text(
+                                    text = "Tìm số hoặc tên chương...",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = panelContentColor.copy(alpha = 0.6f),
+                                )
+                            },
+                            leadingIcon = {
+                                Icon(
+                                    Icons.Default.Search,
+                                    contentDescription = "Tìm chương",
+                                    tint = panelContentColor.copy(alpha = 0.7f),
+                                    modifier = Modifier.size(18.dp),
+                                )
+                            },
+                            trailingIcon = {
+                                if (searchQuery.isNotEmpty()) {
+                                    IconButton(onClick = { searchQuery = "" }) {
+                                        Icon(
+                                            Icons.Default.Clear,
+                                            contentDescription = "Xóa tìm kiếm",
+                                            tint = panelContentColor.copy(alpha = 0.7f),
+                                            modifier = Modifier.size(18.dp),
+                                        )
+                                    }
+                                }
+                            },
+                            singleLine = true,
+                            textStyle = MaterialTheme.typography.bodySmall.copy(color = panelContentColor),
+                            shape = RoundedCornerShape(12.dp),
+                            colors =
+                                OutlinedTextFieldDefaults.colors(
+                                    focusedBorderColor = accentColor,
+                                    unfocusedBorderColor = panelContentColor.copy(alpha = 0.25f),
+                                    cursorColor = accentColor,
+                                ),
+                            modifier =
+                                Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                        )
+
                         HorizontalDivider(
                             color = panelContentColor.copy(alpha = 0.12f),
                             thickness = 1.dp,
                         )
 
-                        // Chapter list
-                        LazyColumn(
-                            state = chapterListState,
-                            modifier = Modifier.fillMaxSize(),
-                        ) {
-                            itemsIndexed(chapters, key = { _, ch -> ch.chapterNumber }) { _, chapter ->
-                                val isCurrent = chapter.chapterNumber == currentChapterNumber
+                        if (filteredChapters.isEmpty()) {
+                            Box(
+                                modifier =
+                                    Modifier
+                                        .fillMaxSize()
+                                        .padding(24.dp),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                Text(
+                                    text = "Không tìm thấy chương phù hợp",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = panelContentColor.copy(alpha = 0.7f),
+                                )
+                            }
+                        } else {
+                            // Chapter list
+                            LazyColumn(
+                                state = chapterListState,
+                                modifier = Modifier.fillMaxSize(),
+                            ) {
+                                itemsIndexed(
+                                    items = filteredChapters,
+                                    key = { index, ch -> "panel_ch_${ch.chapterNumber}_$index" },
+                                ) { _, chapter ->
+                                    val isCurrent = chapter.chapterNumber == currentChapterNumber
 
-                                Surface(
-                                    onClick = { onChapterClick(chapter) },
-                                    color = if (isCurrent) highlightBg else Color.Transparent,
-                                    contentColor = if (isCurrent) highlightText else panelContentColor,
-                                    modifier = Modifier.fillMaxWidth(),
-                                ) {
-                                    Row(
-                                        modifier =
-                                            Modifier
-                                                .padding(horizontal = 16.dp, vertical = 13.dp),
-                                        verticalAlignment = Alignment.CenterVertically,
+                                    Surface(
+                                        onClick = { onChapterClick(chapter) },
+                                        color = if (isCurrent) highlightBg else Color.Transparent,
+                                        contentColor = if (isCurrent) highlightText else panelContentColor,
+                                        modifier = Modifier.fillMaxWidth(),
                                     ) {
-                                        if (isCurrent) {
-                                            Icon(
-                                                Icons.AutoMirrored.Filled.MenuBook,
-                                                contentDescription = null,
-                                                modifier = Modifier.size(18.dp),
-                                                tint = highlightText,
-                                            )
-                                            Spacer(modifier = Modifier.width(10.dp))
-                                        }
+                                        Row(
+                                            modifier =
+                                                Modifier
+                                                    .padding(horizontal = 16.dp, vertical = 13.dp),
+                                            verticalAlignment = Alignment.CenterVertically,
+                                        ) {
+                                            if (isCurrent) {
+                                                Icon(
+                                                    Icons.AutoMirrored.Filled.MenuBook,
+                                                    contentDescription = null,
+                                                    modifier = Modifier.size(18.dp),
+                                                    tint = highlightText,
+                                                )
+                                                Spacer(modifier = Modifier.width(10.dp))
+                                            }
 
-                                        Text(
-                                            text = chapter.title.ifBlank { "Chương ${chapter.chapterNumber}" },
-                                            style =
-                                                MaterialTheme.typography.bodyMedium.copy(
-                                                    fontWeight = if (isCurrent) FontWeight.Bold else FontWeight.Normal,
-                                                ),
-                                            maxLines = 2,
-                                            overflow = TextOverflow.Ellipsis,
-                                        )
+                                            Text(
+                                                text = chapter.title.ifBlank { "Chương ${chapter.chapterNumber}" },
+                                                style =
+                                                    MaterialTheme.typography.bodyMedium.copy(
+                                                        fontWeight = if (isCurrent) FontWeight.Bold else FontWeight.Normal,
+                                                    ),
+                                                maxLines = 2,
+                                                overflow = TextOverflow.Ellipsis,
+                                            )
+                                        }
                                     }
                                 }
                             }

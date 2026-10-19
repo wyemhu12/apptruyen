@@ -1,6 +1,5 @@
 package com.personal.apptruyen.data.remote
 
-import android.util.Log
 import com.personal.apptruyen.data.model.Chapter
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -9,6 +8,7 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.jsoup.Jsoup
 import org.jsoup.nodes.Document
+import timber.log.Timber
 import java.io.IOException
 import java.util.Collections
 
@@ -48,7 +48,10 @@ abstract class BaseScraper(
         val body: String,
         val etag: String? = null,
         val lastModified: String? = null,
+        val timestamp: Long,
     )
+
+    protected open fun nowMs(): Long = System.currentTimeMillis()
 
     private val maxCacheSize = 15
     protected val cache: MutableMap<String, CacheEntry> =
@@ -62,6 +65,20 @@ abstract class BaseScraper(
     // HTTP fetching
     // ══════════════════════════════════════════════════
 
+    internal fun isRetryableScraperException(e: ScraperException): Boolean =
+        when (e) {
+            is ScraperException.NetworkException,
+            is ScraperException.CacheException,
+            -> true
+            is ScraperException.HttpException ->
+                e.statusCode == 408 || e.statusCode == 429 || e.statusCode in 500..599
+            is ScraperException.ParseException,
+            is ScraperException.CircuitOpenException,
+            is ScraperException.LoginRequiredException,
+            is ScraperException.UnknownException,
+            -> false
+        }
+
     /**
      * Fetch URL with retry + exponential backoff.
      * Retries up to [MAX_RETRIES] times on IOException/ScraperException.
@@ -72,6 +89,7 @@ abstract class BaseScraper(
             try {
                 return fetchDocument(url)
             } catch (e: ScraperException) {
+                if (!isRetryableScraperException(e)) throw e
                 lastException = e
                 if (attempt < MAX_RETRIES - 1) {
                     val backoff = INITIAL_BACKOFF_MS * (1 shl attempt)
@@ -98,10 +116,17 @@ abstract class BaseScraper(
      */
     protected fun fetchDocument(url: String): Document {
         val absUrl = url.ensureAbsolute()
+        val now = nowMs()
 
         if (!useEtagCaching) {
-            // Simple mode: return cached body immediately if available
-            cache[absUrl]?.let { return Jsoup.parse(it.body, absUrl) }
+            // Simple mode: return cached body immediately if within TTL
+            cache[absUrl]?.let { entry ->
+                if (now - entry.timestamp <= CACHE_TTL_MS) {
+                    return Jsoup.parse(entry.body, absUrl)
+                } else {
+                    cache.remove(absUrl, entry)
+                }
+            }
         }
 
         val requestBuilder =
@@ -117,12 +142,21 @@ abstract class BaseScraper(
 
         if (useEtagCaching) {
             // ETag mode: send conditional headers
-            val existing = cache[absUrl]
+            val existing =
+                cache[absUrl]?.let { entry ->
+                    if (now - entry.timestamp <= CACHE_TTL_MS || entry.etag != null || entry.lastModified != null) {
+                        entry
+                    } else {
+                        cache.remove(absUrl, entry)
+                        null
+                    }
+                }
             existing?.etag?.let { requestBuilder.header("If-None-Match", it) }
             existing?.lastModified?.let { requestBuilder.header("If-Modified-Since", it) }
         }
 
         return client.newCall(requestBuilder.build()).execute().use { response ->
+            val writeTime = nowMs()
             if (useEtagCaching) {
                 val existing = cache[absUrl]
                 val newEtag = response.header("ETag") ?: existing?.etag
@@ -132,7 +166,7 @@ abstract class BaseScraper(
                     val cachedBody =
                         existing?.body
                             ?: throw ScraperException.CacheException("304 nhưng không có cache cho $absUrl")
-                    cache[absUrl] = CacheEntry(cachedBody, newEtag, newLastMod)
+                    cache[absUrl] = CacheEntry(cachedBody, newEtag, newLastMod, timestamp = writeTime)
                     return@use Jsoup.parse(cachedBody, absUrl)
                 }
 
@@ -142,7 +176,7 @@ abstract class BaseScraper(
                 val body =
                     response.body?.string()
                         ?: throw ScraperException.ParseException("Phản hồi rỗng từ $absUrl", absUrl)
-                cache[absUrl] = CacheEntry(body, newEtag, newLastMod)
+                cache[absUrl] = CacheEntry(body, newEtag, newLastMod, timestamp = writeTime)
                 Jsoup.parse(body, absUrl)
             } else {
                 // Simple mode
@@ -152,7 +186,7 @@ abstract class BaseScraper(
                 val body =
                     response.body?.string()
                         ?: throw ScraperException.ParseException("Phản hồi rỗng từ $absUrl", absUrl)
-                cache[absUrl] = CacheEntry(body)
+                cache[absUrl] = CacheEntry(body, timestamp = writeTime)
                 Jsoup.parse(body, absUrl)
             }
         }
@@ -262,10 +296,12 @@ abstract class BaseScraper(
             } catch (e: ScraperException) {
                 throw e
             } catch (e: Exception) {
-                Log.d(sourceId, "Failed to load chapter: $chapterUrl", e)
+                if (e is kotlinx.coroutines.CancellationException) throw e
+                Timber.tag(sourceId).d(e, "Failed to load chapter: %s", chapterUrl)
                 throw ScraperException.ParseException(
-                    "Không thể tải nội dung chương: ${e.message}",
-                    chapterUrl,
+                    message = "Không thể tải nội dung chương",
+                    url = chapterUrl,
+                    cause = e,
                 )
             }
         }
@@ -312,7 +348,18 @@ abstract class BaseScraper(
      * Validate and normalize cover image URL.
      * Returns empty string if URL is null, blank, or not HTTP.
      */
-    protected fun validateCoverUrl(url: String?): String = url?.takeIf { it.isNotBlank() && it.startsWith("http") } ?: ""
+    protected fun validateCoverUrl(url: String?): String {
+        val valid = url?.trim()?.takeIf { it.isNotBlank() && it.startsWith("http") } ?: return ""
+        return if (
+            valid.startsWith("http://") &&
+            !valid.startsWith("http://localhost") &&
+            !valid.startsWith("http://127.0.0.1")
+        ) {
+            "https://${valid.removePrefix("http://")}"
+        } else {
+            valid
+        }
+    }
 
     // ══════════════════════════════════════════════════
     // Constants
@@ -324,6 +371,7 @@ abstract class BaseScraper(
         const val MAX_RETRIES = 3
         const val INITIAL_BACKOFF_MS = 1000L
         const val MIN_CONTENT_LENGTH = 50
+        const val CACHE_TTL_MS = 10 * 60 * 1000L
 
         val DEFAULT_CONTENT_SELECTORS =
             listOf(

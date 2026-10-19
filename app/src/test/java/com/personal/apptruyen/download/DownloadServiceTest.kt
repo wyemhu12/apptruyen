@@ -1,6 +1,9 @@
 package com.personal.apptruyen.download
 
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertFalse
+import org.junit.jupiter.api.Assertions.assertNull
+import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
 class DownloadServiceTest {
@@ -42,5 +45,61 @@ class DownloadServiceTest {
             )
 
         assertEquals("Đã tải 20 chương thành công", text)
+    }
+
+    @Test
+    fun `buildCompletionText returns Vietnamese Cloudflare rate limit message when rateLimited is true`() {
+        val text =
+            DownloadService.buildCompletionText(
+                downloaded = 5,
+                errors = 1,
+                loginRequired = false,
+                rateLimited = true,
+            )
+
+        assertEquals(
+            "Đã tải 5 chương. Nguồn truyện đang giới hạn tốc độ truy cập (Cloudflare), vui lòng thử lại sau ít phút.",
+            text,
+        )
+    }
+
+    @Test
+    fun `shouldStopOnJobCompletion and resolveStopStartIdOnCompletion return lastStartId only when token matches`() {
+        assertTrue(DownloadService.shouldStopOnJobCompletion(activeToken = 2L, jobToken = 2L))
+        assertFalse(DownloadService.shouldStopOnJobCompletion(activeToken = 2L, jobToken = 1L))
+        assertTrue(DownloadService.shouldStopOnJobCompletion(activeToken = 0L, jobToken = 0L))
+
+        assertEquals(
+            42,
+            DownloadService.resolveStopStartIdOnCompletion(
+                activeToken = 2L,
+                jobToken = 2L,
+                lastStartId = 42,
+            ),
+        )
+        assertNull(
+            DownloadService.resolveStopStartIdOnCompletion(
+                activeToken = 2L,
+                jobToken = 1L,
+                lastStartId = 42,
+            ),
+        )
+    }
+
+    @Test
+    fun `buildCompletionText formats timedOut message in Vietnamese with priority over generic errors`() {
+        val text =
+            DownloadService.buildCompletionText(
+                downloaded = 12,
+                errors = 3,
+                loginRequired = false,
+                rateLimited = false,
+                timedOut = true,
+            )
+
+        assertEquals(
+            "Đã tải 12 chương. Đã tạm dừng do hệ thống giới hạn thời gian chạy nền, vui lòng mở ứng dụng để tải tiếp.",
+            text,
+        )
     }
 }

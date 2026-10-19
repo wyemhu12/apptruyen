@@ -100,6 +100,7 @@ class TtsService : MediaSessionService() {
     private val _state = MutableStateFlow(TtsState())
     val state: StateFlow<TtsState> = _state.asStateFlow()
     private var pendingPlayOnInit = false
+    private var pendingSpeed: Float? = null
     private var pendingPitch: Float? = null
     private var pendingVoice: String? = null
 
@@ -178,6 +179,12 @@ class TtsService : MediaSessionService() {
                         }
 
                     val currentVoice = tts?.voice?.name ?: ""
+                    val initialSpeed = (pendingSpeed ?: _state.value.speed).coerceIn(0.5f, 2.0f)
+                    pendingSpeed = null
+                    tts?.setSpeechRate(initialSpeed)
+                    val initialPitch = (pendingPitch ?: _state.value.pitch).coerceIn(0.5f, 2.0f)
+                    pendingPitch = null
+                    tts?.setPitch(initialPitch)
 
                     _state.value =
                         _state.value.copy(
@@ -186,12 +193,10 @@ class TtsService : MediaSessionService() {
                             errorMessage = if (!hasVi) "Thiết bị chưa cài giọng đọc tiếng Việt." else null,
                             availableVoices = viVoices,
                             currentVoiceName = currentVoice,
+                            speed = initialSpeed,
+                            pitch = initialPitch,
                         )
 
-                    pendingPitch?.let {
-                        setPitch(it)
-                        pendingPitch = null
-                    }
                     pendingVoice?.let {
                         setVoice(it)
                         pendingVoice = null
@@ -213,6 +218,20 @@ class TtsService : MediaSessionService() {
 
                             override fun onDone(utteranceId: String?) {
                                 mainHandler.post {
+                                    if (!TtsPlaybackStateMachine.shouldProcessUtteranceDone(
+                                            utteranceId = utteranceId,
+                                            currentParagraphIndex = currentIndex,
+                                            isPlaying = _state.value.isPlaying,
+                                        )
+                                    ) {
+                                        Timber.d(
+                                            "Ignoring stale TTS onDone(utteranceId=%s, currentIndex=%d, isPlaying=%b)",
+                                            utteranceId,
+                                            currentIndex,
+                                            _state.value.isPlaying,
+                                        )
+                                        return@post
+                                    }
                                     if (currentIndex < paragraphs.size - 1) {
                                         currentIndex++
                                         _state.value = _state.value.copy(currentParagraph = currentIndex)
@@ -233,10 +252,19 @@ class TtsService : MediaSessionService() {
                             @Deprecated("Deprecated in Java")
                             override fun onError(utteranceId: String?) {
                                 mainHandler.post {
+                                    if (!stateMachine.isActiveOrBuffering && !_state.value.isPlaying) {
+                                        Timber.d("Ignoring TTS onError(%s) while not active/playing", utteranceId)
+                                        return@post
+                                    }
+                                    Timber.e("TTS error at paragraph $currentIndex (utterance=%s)", utteranceId)
                                     stateMachine.onStopRequested()
+                                    stopSilentPlayer()
+                                    abandonAudioFocus()
+                                    releaseWakeLock()
                                     _state.value =
                                         _state.value.copy(
                                             isPlaying = false,
+                                            isPaused = false,
                                             errorMessage = "Lỗi khi đọc",
                                         )
                                     syncPlayerState()
@@ -344,24 +372,28 @@ class TtsService : MediaSessionService() {
 
     fun nextParagraph() {
         if (currentIndex < paragraphs.size - 1) {
-            tts?.stop()
-            currentIndex++
-            _state.value = _state.value.copy(currentParagraph = currentIndex)
-            syncPlayerState()
+            val targetIndex = currentIndex + 1
             if (_state.value.isPlaying || _state.value.isPaused) {
-                speakCurrent()
+                seekAndPlay(targetIndex)
+            } else {
+                tts?.stop()
+                currentIndex = targetIndex
+                _state.value = _state.value.copy(currentParagraph = currentIndex)
+                syncPlayerState()
             }
         }
     }
 
     fun prevParagraph() {
         if (currentIndex > 0) {
-            tts?.stop()
-            currentIndex--
-            _state.value = _state.value.copy(currentParagraph = currentIndex)
-            syncPlayerState()
+            val targetIndex = currentIndex - 1
             if (_state.value.isPlaying || _state.value.isPaused) {
-                speakCurrent()
+                seekAndPlay(targetIndex)
+            } else {
+                tts?.stop()
+                currentIndex = targetIndex
+                _state.value = _state.value.copy(currentParagraph = currentIndex)
+                syncPlayerState()
             }
         }
     }
@@ -376,8 +408,12 @@ class TtsService : MediaSessionService() {
 
     fun setSpeed(speed: Float) {
         val clamped = speed.coerceIn(0.5f, 2.0f)
-        tts?.setSpeechRate(clamped)
         _state.value = _state.value.copy(speed = clamped)
+        if (!_state.value.isInitialized) {
+            pendingSpeed = clamped
+            return
+        }
+        tts?.setSpeechRate(clamped)
         syncPlayerState()
     }
 
@@ -389,13 +425,13 @@ class TtsService : MediaSessionService() {
     }
 
     fun setPitch(pitch: Float) {
+        val clamped = pitch.coerceIn(0.5f, 2.0f)
+        _state.value = _state.value.copy(pitch = clamped)
         if (!_state.value.isInitialized) {
-            pendingPitch = pitch
+            pendingPitch = clamped
             return
         }
-        val clamped = pitch.coerceIn(0.5f, 2.0f)
         tts?.setPitch(clamped)
-        _state.value = _state.value.copy(pitch = clamped)
         syncPlayerState()
     }
 

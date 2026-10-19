@@ -22,6 +22,7 @@ import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.personal.apptruyen.data.model.ReadingProgress
 import com.personal.apptruyen.data.model.Story
 import com.personal.apptruyen.ui.components.AnimatedEmptyState
@@ -37,11 +38,12 @@ fun HomeScreen(
     onDownloadsClick: () -> Unit,
     viewModel: HomeViewModel = hiltViewModel(),
 ) {
-    val recentlyRead by viewModel.recentlyRead.collectAsState()
-    val progressMap by viewModel.progressMap.collectAsState()
-    val sortOption by viewModel.sortOption.collectAsState()
-    val isRefreshing by viewModel.isRefreshing.collectAsState()
-    val readingStats by viewModel.readingStats.collectAsState()
+    val recentlyRead by viewModel.recentlyRead.collectAsStateWithLifecycle()
+    val hasReadingHistory by viewModel.hasReadingHistory.collectAsStateWithLifecycle()
+    val progressMap by viewModel.progressMap.collectAsStateWithLifecycle()
+    val sortOption by viewModel.sortOption.collectAsStateWithLifecycle()
+    val isRefreshing by viewModel.isRefreshing.collectAsStateWithLifecycle()
+    val readingStats by viewModel.readingStats.collectAsStateWithLifecycle()
 
     val pagerState = rememberPagerState(pageCount = { 2 })
     val coroutineScope = rememberCoroutineScope()
@@ -126,7 +128,7 @@ fun HomeScreen(
                 ) { page ->
                     when (page) {
                         0 -> {
-                            if (recentlyRead.isEmpty()) {
+                            if (!hasReadingHistory && recentlyRead.isEmpty()) {
                                 AnimatedEmptyState(
                                     icon = Icons.Default.MenuBook,
                                     message = "Chưa có truyện nào.\nNhấn tìm kiếm để bắt đầu!",
@@ -135,7 +137,7 @@ fun HomeScreen(
                                 )
                             } else {
                                 Box(modifier = Modifier.fillMaxSize()) {
-                                    Column {
+                                    Column(modifier = Modifier.fillMaxSize()) {
                                         // Sort chips
                                         Row(
                                             modifier =
@@ -159,12 +161,21 @@ fun HomeScreen(
                                             }
                                         }
 
-                                        ReadingListContent(
-                                            stories = recentlyRead,
-                                            progressMap = progressMap,
-                                            onStoryClick = onStoryClick,
-                                            onDeleteClick = { story -> storyToDelete = story },
-                                        )
+                                        if (recentlyRead.isEmpty()) {
+                                            AnimatedEmptyState(
+                                                icon = Icons.Default.DoneAll,
+                                                message = "Tất cả truyện đang đọc đều đã hoàn thành đến chương mới nhất.",
+                                                actionText = "Xem gần đây",
+                                                onActionClick = { viewModel.setSortOption(HomeSortOption.RECENT) },
+                                            )
+                                        } else {
+                                            ReadingListContent(
+                                                stories = recentlyRead,
+                                                progressMap = progressMap,
+                                                onStoryClick = onStoryClick,
+                                                onDeleteClick = { story -> storyToDelete = story },
+                                            )
+                                        }
                                     }
                                 }
                             }
@@ -532,8 +543,9 @@ private fun ReadingStatsTab(
                             horizontalArrangement = Arrangement.SpaceEvenly,
                             verticalAlignment = Alignment.Bottom,
                         ) {
-                            val dayLabels = listOf("T2", "T3", "T4", "T5", "T6", "T7", "CN")
                             stats.weeklyChapters.forEachIndexed { idx, chapters ->
+                                val dayStat = stats.weeklyStats.getOrNull(idx)
+                                val isToday = dayStat?.isToday ?: (idx == stats.weeklyChapters.lastIndex)
                                 Column(
                                     horizontalAlignment = Alignment.CenterHorizontally,
                                     verticalArrangement = Arrangement.Bottom,
@@ -561,7 +573,7 @@ private fun ReadingStatsTab(
                                                 .height(barHeight),
                                         shape = RoundedCornerShape(topStart = 4.dp, topEnd = 4.dp),
                                         color =
-                                            if (idx == stats.weeklyChapters.lastIndex) {
+                                            if (isToday) {
                                                 MaterialTheme.colorScheme.primary
                                             } else {
                                                 MaterialTheme.colorScheme.primary.copy(alpha = 0.4f)
@@ -569,9 +581,15 @@ private fun ReadingStatsTab(
                                     ) {}
                                     Spacer(modifier = Modifier.height(4.dp))
                                     Text(
-                                        dayLabels.getOrElse(idx) { "" },
+                                        text = dayStat?.label ?: "",
                                         style = MaterialTheme.typography.labelSmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        fontWeight = if (isToday) FontWeight.Bold else FontWeight.Normal,
+                                        color =
+                                            if (isToday) {
+                                                MaterialTheme.colorScheme.primary
+                                            } else {
+                                                MaterialTheme.colorScheme.onSurfaceVariant
+                                            },
                                     )
                                 }
                             }

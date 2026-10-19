@@ -7,9 +7,13 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.content.pm.ServiceInfo
+import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
 import androidx.core.app.NotificationCompat
+import androidx.core.app.ServiceCompat
+import androidx.core.content.ContextCompat
 import com.personal.apptruyen.MainActivity
 import com.personal.apptruyen.R
 import com.personal.apptruyen.data.remote.ScraperException
@@ -59,18 +63,37 @@ class DownloadService : Service() {
         const val EXTRA_STORY_TITLE = "story_title"
         const val EXTRA_CHAPTER_NUMBERS = "chapter_numbers"
 
+        private const val WAKELOCK_TIMEOUT_MS = 2 * 60 * 60 * 1000L
+
         // Progress được shared qua static StateFlow — ViewModel observe từ bên ngoài
         private val _downloadState = MutableStateFlow<DownloadState>(DownloadState.Idle)
         val downloadState: StateFlow<DownloadState> = _downloadState.asStateFlow()
+
+        internal fun shouldStopOnJobCompletion(
+            activeToken: Long,
+            jobToken: Long,
+        ): Boolean = activeToken == jobToken
+
+        internal fun resolveStopStartIdOnCompletion(
+            activeToken: Long,
+            jobToken: Long,
+            lastStartId: Int,
+        ): Int? = if (shouldStopOnJobCompletion(activeToken, jobToken)) lastStartId else null
 
         internal fun buildCompletionText(
             downloaded: Int,
             errors: Int,
             loginRequired: Boolean = false,
+            rateLimited: Boolean = false,
+            timedOut: Boolean = false,
         ): String =
             when {
+                timedOut ->
+                    "Đã tải $downloaded chương. Đã tạm dừng do hệ thống giới hạn thời gian chạy nền, vui lòng mở ứng dụng để tải tiếp."
                 loginRequired ->
                     "Đã tải $downloaded chương. Phiên đăng nhập đã hết hạn, vui lòng đăng nhập lại để tải tiếp."
+                rateLimited ->
+                    "Đã tải $downloaded chương. Nguồn truyện đang giới hạn tốc độ truy cập (Cloudflare), vui lòng thử lại sau ít phút."
                 errors > 0 -> "Đã tải $downloaded chương ($errors lỗi)"
                 else -> "Đã tải $downloaded chương thành công"
             }
@@ -80,7 +103,7 @@ class DownloadService : Service() {
             storyId: String,
             storyTitle: String,
             chapterNumbers: IntArray,
-        ) {
+        ): Boolean {
             val intent =
                 Intent(context, DownloadService::class.java).apply {
                     action = ACTION_START
@@ -88,7 +111,13 @@ class DownloadService : Service() {
                     putExtra(EXTRA_STORY_TITLE, storyTitle)
                     putExtra(EXTRA_CHAPTER_NUMBERS, chapterNumbers)
                 }
-            context.startForegroundService(intent)
+            return try {
+                ContextCompat.startForegroundService(context, intent)
+                true
+            } catch (e: Exception) {
+                Timber.e(e, "Failed to call startForegroundService for DownloadService")
+                false
+            }
         }
 
         fun cancelDownload(context: Context) {
@@ -124,6 +153,8 @@ class DownloadService : Service() {
     }
 
     private var downloadJob: Job? = null
+    private var activeDownloadToken: Long = 0L
+    private var lastStartId: Int = 0
     private var wakeLock: PowerManager.WakeLock? = null
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
@@ -139,16 +170,27 @@ class DownloadService : Service() {
         flags: Int,
         startId: Int,
     ): Int {
+        lastStartId = startId
         when (intent?.action) {
             ACTION_START -> {
-                val storyId = intent.getStringExtra(EXTRA_STORY_ID) ?: return START_NOT_STICKY
+                val storyId = intent.getStringExtra(EXTRA_STORY_ID)
+                val chapterNumbers = intent.getIntArrayExtra(EXTRA_CHAPTER_NUMBERS)
+                if (storyId == null || chapterNumbers == null) {
+                    if (downloadJob?.isActive != true) {
+                        stopSelfCleanly(unconditional = false)
+                    }
+                    return START_NOT_STICKY
+                }
                 val storyTitle = intent.getStringExtra(EXTRA_STORY_TITLE) ?: "Truyện"
-                val chapterNumbers = intent.getIntArrayExtra(EXTRA_CHAPTER_NUMBERS) ?: return START_NOT_STICKY
-
                 startDownload(storyId, storyTitle, chapterNumbers)
             }
             ACTION_CANCEL -> {
                 cancelCurrentDownload()
+            }
+            else -> {
+                if (downloadJob?.isActive != true) {
+                    stopSelfCleanly(unconditional = false)
+                }
             }
         }
         return START_NOT_STICKY
@@ -161,20 +203,61 @@ class DownloadService : Service() {
         releaseWakeLock()
     }
 
+    override fun onTimeout(
+        startId: Int,
+        fgsType: Int,
+    ) {
+        Timber.w("DownloadService FGS dataSync timeout reached (startId=%d, fgsType=%d)", startId, fgsType)
+        val current = _downloadState.value as? DownloadState.Downloading
+        val title = current?.storyTitle ?: "Truyện"
+        val downloaded = current?.progress?.current ?: 0
+        val errors = current?.progress?.errors ?: 0
+        activeDownloadToken++
+        downloadJob?.cancel()
+        downloadJob = null
+        _downloadState.value =
+            DownloadState.Cancelled(
+                storyId = current?.storyId.orEmpty(),
+                storyTitle = title,
+                downloaded = downloaded,
+            )
+        sendCompletionNotification(
+            storyTitle = title,
+            downloaded = downloaded,
+            errors = errors,
+            timedOut = true,
+        )
+        stopSelfCleanly(unconditional = true)
+    }
+
     private fun startDownload(
         storyId: String,
         storyTitle: String,
         chapterNumbers: IntArray,
     ) {
+        val jobToken = ++activeDownloadToken
         // Nếu đang tải, cancel cái cũ trước
         downloadJob?.cancel()
 
         // Start foreground NGAY để tránh crash trên Android 12+
         acquireWakeLock()
+        val initialNotification = buildProgressNotification(storyTitle, 0, chapterNumbers.size, 0)
         try {
-            startForeground(NOTIFICATION_ID, buildProgressNotification(storyTitle, 0, chapterNumbers.size, 0))
+            ServiceCompat.startForeground(
+                this,
+                NOTIFICATION_ID,
+                initialNotification,
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
+                } else {
+                    0
+                },
+            )
         } catch (e: Exception) {
-            Timber.w(e, "startForeground failed")
+            Timber.e(e, "startForeground failed")
+            _downloadState.value = DownloadState.Cancelled(storyId, storyTitle, 0)
+            stopSelfCleanly(unconditional = true)
+            return
         }
 
         downloadJob =
@@ -191,11 +274,11 @@ class DownloadService : Service() {
                     val allChapters = downloadRepository.getChaptersByNumbers(storyId, chapterNumbers.toList())
                     if (allChapters.isEmpty()) {
                         _downloadState.value = DownloadState.Completed(storyId, storyTitle, 0, 0)
-                        stopSelfCleanly()
                         return@launch
                     }
 
                     downloadRepository.downloadChapters(storyId, allChapters).collect { progress ->
+                        renewWakeLock()
                         lastProgress = progress
                         _downloadState.value = DownloadState.Downloading(storyId, storyTitle, progress)
 
@@ -228,6 +311,13 @@ class DownloadService : Service() {
                     val errors = (lastProgress?.errors ?: 0).coerceAtLeast(1)
                     _downloadState.value = DownloadState.Completed(storyId, storyTitle, downloaded, errors)
                     sendCompletionNotification(storyTitle, downloaded, errors, loginRequired = true)
+                } catch (e: ScraperException.HttpException) {
+                    Timber.w(e, "Download stopped: HTTP ${e.statusCode}")
+                    val downloaded = lastProgress?.current ?: 0
+                    val errors = (lastProgress?.errors ?: 0).coerceAtLeast(1)
+                    val isRateLimited = e.statusCode in com.personal.apptruyen.data.repository.DownloadRepository.RATE_LIMIT_HTTP_CODES
+                    _downloadState.value = DownloadState.Completed(storyId, storyTitle, downloaded, errors)
+                    sendCompletionNotification(storyTitle, downloaded, errors, rateLimited = isRateLimited)
                 } catch (e: Exception) {
                     Timber.e(e, "Download failed")
                     val downloaded = lastProgress?.current ?: 0
@@ -235,13 +325,18 @@ class DownloadService : Service() {
                     _downloadState.value = DownloadState.Completed(storyId, storyTitle, downloaded, errors)
                     sendCompletionNotification(storyTitle, downloaded, errors)
                 } finally {
-                    stopSelfCleanly()
+                    withContext(NonCancellable + Dispatchers.Main.immediate) {
+                        if (shouldStopOnJobCompletion(activeDownloadToken, jobToken)) {
+                            stopSelfCleanly(unconditional = false)
+                        }
+                    }
                 }
             }
     }
 
     private fun cancelCurrentDownload() {
         val currentState = _downloadState.value
+        activeDownloadToken++
         downloadJob?.cancel()
         downloadJob = null
 
@@ -256,20 +351,16 @@ class DownloadService : Service() {
             sendCancellationNotification(currentState.storyTitle, downloaded)
         }
 
-        stopSelfCleanly()
+        stopSelfCleanly(unconditional = false)
     }
 
-    private fun stopSelfCleanly() {
+    private fun stopSelfCleanly(unconditional: Boolean = false) {
         releaseWakeLock()
         stopForeground(STOP_FOREGROUND_REMOVE)
-        stopSelf()
-
-        // Reset state after short delay cho ViewModel đọc kịp result
-        serviceScope.launch {
-            delay(3000)
-            if (_downloadState.value !is DownloadState.Downloading) {
-                _downloadState.value = DownloadState.Idle
-            }
+        if (unconditional) {
+            stopSelf()
+        } else {
+            stopSelfResult(lastStartId)
         }
     }
 
@@ -334,7 +425,7 @@ class DownloadService : Service() {
             .setContentIntent(openIntent)
             .setOngoing(true)
             .setOnlyAlertOnce(true)
-            .setProgress(total, current, false)
+            .setProgress(total, (current + errors).coerceAtMost(total), false)
             .addAction(R.drawable.ic_notification, "Hủy", cancelIntent)
             .build()
     }
@@ -344,8 +435,10 @@ class DownloadService : Service() {
         downloaded: Int,
         errors: Int,
         loginRequired: Boolean = false,
+        rateLimited: Boolean = false,
+        timedOut: Boolean = false,
     ) {
-        val text = buildCompletionText(downloaded, errors, loginRequired)
+        val text = buildCompletionText(downloaded, errors, loginRequired, rateLimited, timedOut)
         val nm = getSystemService(NotificationManager::class.java)
         nm.notify(
             storyTitle.hashCode(),
@@ -387,8 +480,13 @@ class DownloadService : Service() {
                     PowerManager.PARTIAL_WAKE_LOCK,
                     "AppTruyen::DownloadWakeLock",
                 ).apply {
-                    acquire(2 * 60 * 60 * 1000L) // 2 hours max
+                    setReferenceCounted(false)
+                    acquire(WAKELOCK_TIMEOUT_MS)
                 }
+    }
+
+    private fun renewWakeLock() {
+        wakeLock?.acquire(WAKELOCK_TIMEOUT_MS)
     }
 
     private fun releaseWakeLock() {

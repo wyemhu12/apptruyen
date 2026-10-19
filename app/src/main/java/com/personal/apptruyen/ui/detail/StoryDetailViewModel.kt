@@ -7,11 +7,13 @@ import androidx.lifecycle.viewModelScope
 import com.personal.apptruyen.data.model.Chapter
 import com.personal.apptruyen.data.model.ReadingProgress
 import com.personal.apptruyen.data.model.Story
+import com.personal.apptruyen.data.remote.ScraperException
 import com.personal.apptruyen.data.repository.DownloadProgress
 import com.personal.apptruyen.data.repository.IReadingProgressRepository
 import com.personal.apptruyen.data.repository.IStoryRepository
 import com.personal.apptruyen.data.repository.ITextReplacementRepository
 import com.personal.apptruyen.download.DownloadService
+import com.personal.apptruyen.ui.navigation.NavigationUtils
 import com.personal.apptruyen.util.TextReplacementHelper
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.collections.immutable.ImmutableList
@@ -21,6 +23,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
+import timber.log.Timber
 import javax.inject.Inject
 
 @HiltViewModel
@@ -35,7 +38,7 @@ class StoryDetailViewModel
         private val application: Application,
     ) : ViewModel() {
 
-        private val storyId: String = savedStateHandle["storyId"] ?: ""
+        private val storyId: String = NavigationUtils.decodeRouteParam(savedStateHandle["storyId"] ?: "")
         private val storyUrl: String = savedStateHandle["storyUrl"] ?: ""
 
         data class DetailState(
@@ -53,7 +56,10 @@ class StoryDetailViewModel
             val storyReplacementsEnabled: Boolean = false,
             val storyReplacements: ImmutableList<Pair<String, String>> = persistentListOf(),
             val showStorySettings: Boolean = false,
-        )
+        ) {
+            val lastReadChapter: Int?
+                get() = readingProgress?.lastChapterNumber?.takeIf { it > 0 }
+        }
 
         private val _state = MutableStateFlow(DetailState())
         val state: StateFlow<DetailState> = _state.asStateFlow()
@@ -72,10 +78,16 @@ class StoryDetailViewModel
 
         // ── Per-story text replacement ──
 
-        private fun loadStoryReplacements() {
-            if (storyId.isBlank()) return
+        private fun effectiveStoryId(): String =
+            _state.value.story
+                ?.id
+                ?.ifBlank { storyId }
+                ?: storyId
+
+        private fun loadStoryReplacements(targetId: String = effectiveStoryId()) {
+            if (targetId.isBlank()) return
             viewModelScope.launch {
-                val data = textReplacementRepository.getStoryReplacements(storyId)
+                val data = textReplacementRepository.getStoryReplacements(targetId)
                 if (data != null) {
                     _state.update { s ->
                         s.copy(
@@ -95,7 +107,7 @@ class StoryDetailViewModel
             val newValue = !_state.value.storyReplacementsEnabled
             _state.update { it.copy(storyReplacementsEnabled = newValue) }
             viewModelScope.launch {
-                textReplacementRepository.setStoryReplacementsEnabled(storyId, newValue)
+                textReplacementRepository.setStoryReplacementsEnabled(effectiveStoryId(), newValue)
             }
         }
 
@@ -104,15 +116,17 @@ class StoryDetailViewModel
             to: String,
         ) {
             viewModelScope.launch {
-                textReplacementRepository.addStoryReplacement(storyId, from, to)
-                loadStoryReplacements() // Reload to sync state
+                val targetId = effectiveStoryId()
+                textReplacementRepository.addStoryReplacement(targetId, from, to)
+                loadStoryReplacements(targetId) // Reload to sync state
             }
         }
 
         fun removeStoryReplacement(index: Int) {
             viewModelScope.launch {
-                textReplacementRepository.removeStoryReplacement(storyId, index)
-                loadStoryReplacements()
+                val targetId = effectiveStoryId()
+                textReplacementRepository.removeStoryReplacement(targetId, index)
+                loadStoryReplacements(targetId)
             }
         }
 
@@ -139,6 +153,9 @@ class StoryDetailViewModel
                         com.personal.apptruyen.ui.navigation.Screen.StoryDetail
                             .decodeUrl(storyUrl)
                     val story = repository.getStoryDetail(decodedUrl)
+                    if (story.id.isNotBlank() && story.id != storyId) {
+                        loadStoryReplacements(story.id)
+                    }
 
                     // Phase 1: First page chapters + reading progress in parallel → display INSTANTLY
                     val chaptersDeferred = async { repository.getFirstPageChapterList(decodedUrl, story.id) }
@@ -208,16 +225,18 @@ class StoryDetailViewModel
                                 try {
                                     repository.loadRemainingChapters(decodedUrl, story.id, totalPages)
                                 } catch (e: Exception) {
+                                    if (e is kotlinx.coroutines.CancellationException) throw e
                                     // Non-fatal: first page already displayed
-                                    android.util.Log.d("StoryDetail", "Background chapter crawl failed", e)
+                                    Timber.tag("StoryDetail").d(e, "Background chapter crawl failed")
                                 }
                             }
                     }
                 } catch (e: Exception) {
+                    if (e is kotlinx.coroutines.CancellationException) throw e
                     _state.value =
                         _state.value.copy(
                             isLoading = false,
-                            error = "Lỗi tải thông tin truyện: ${e.localizedMessage ?: "Không thể kết nối"}",
+                            error = (e as? ScraperException)?.message ?: "Không thể tải thông tin truyện. Vui lòng kiểm tra mạng và thử lại.",
                         )
                 }
             }
@@ -281,12 +300,20 @@ class StoryDetailViewModel
                 repository.addToLibrary(story.id)
             }
 
-            DownloadService.startDownload(
-                context = application,
-                storyId = story.id,
-                storyTitle = story.title,
-                chapterNumbers = chapterNumbers,
-            )
+            val started =
+                DownloadService.startDownload(
+                    context = application,
+                    storyId = story.id,
+                    storyTitle = story.title,
+                    chapterNumbers = chapterNumbers,
+                )
+            if (!started) {
+                _state.update {
+                    it.copy(
+                        error = "Không thể khởi chạy dịch vụ tải nền. Vui lòng giữ ứng dụng trên màn hình và thử lại.",
+                    )
+                }
+            }
         }
 
         fun cancelDownload() {
@@ -300,12 +327,16 @@ class StoryDetailViewModel
         private fun observeDownloadService() {
             DownloadService.downloadState
                 .onEach { downloadState ->
+                    val matchesCurrentStory =
+                        { targetId: String ->
+                            targetId == storyId || targetId == _state.value.story?.id
+                        }
                     when (downloadState) {
                         is DownloadService.DownloadState.Idle -> {
                             _state.update { it.copy(isDownloading = false, downloadProgress = null) }
                         }
                         is DownloadService.DownloadState.Downloading -> {
-                            if (downloadState.storyId == storyId) {
+                            if (matchesCurrentStory(downloadState.storyId)) {
                                 _state.update {
                                     it.copy(
                                         isDownloading = true,
@@ -315,12 +346,12 @@ class StoryDetailViewModel
                             }
                         }
                         is DownloadService.DownloadState.Completed -> {
-                            if (downloadState.storyId == storyId) {
+                            if (matchesCurrentStory(downloadState.storyId)) {
                                 _state.update { it.copy(isDownloading = false, downloadProgress = null) }
                             }
                         }
                         is DownloadService.DownloadState.Cancelled -> {
-                            if (downloadState.storyId == storyId) {
+                            if (matchesCurrentStory(downloadState.storyId)) {
                                 _state.update { it.copy(isDownloading = false, downloadProgress = null) }
                             }
                         }
@@ -328,7 +359,29 @@ class StoryDetailViewModel
                 }.launchIn(viewModelScope)
         }
 
+        fun resolveChapterUrlForReading(chapterNumber: Int): String {
+            val s = _state.value
+            val exact = s.chapters.find { it.chapterNumber == chapterNumber }?.url
+            if (!exact.isNullOrBlank()) return exact
+
+            val sampleUrl =
+                s.chapters
+                    .firstOrNull()
+                    ?.url
+                    .orEmpty()
+            if (sampleUrl.isNotBlank() && CHAPTER_URL_REGEX.containsMatchIn(sampleUrl)) {
+                return sampleUrl.replace(CHAPTER_URL_REGEX, "/chuong-$chapterNumber")
+            }
+            return s.story?.url?.takeIf { it.isNotBlank() }
+                ?: com.personal.apptruyen.ui.navigation.Screen.StoryDetail
+                    .decodeUrl(storyUrl)
+        }
+
         fun retry() {
             loadStoryDetail()
+        }
+
+        companion object {
+            private val CHAPTER_URL_REGEX = Regex("/chuong-\\d+(-[A-Za-z0-9_!-]+)?")
         }
     }

@@ -1,6 +1,6 @@
 package com.personal.apptruyen.data.remote
 
-import android.util.Log
+import timber.log.Timber
 import java.util.concurrent.ConcurrentHashMap
 
 /**
@@ -50,7 +50,7 @@ class ScraperCircuitBreaker(
                     val elapsed = System.currentTimeMillis() - circuit.lastFailureTime
                     if (elapsed >= resetTimeoutMs) {
                         circuit.state = State.HALF_OPEN
-                        Log.d(tag, "[$sourceId] OPEN → HALF_OPEN (${elapsed}ms elapsed)")
+                        Timber.tag(tag).d("[%s] OPEN → HALF_OPEN (%dms elapsed)", sourceId, elapsed)
                         State.HALF_OPEN
                     } else {
                         State.OPEN
@@ -90,7 +90,7 @@ class ScraperCircuitBreaker(
             circuit.failureCount = 0
             circuit.state = State.CLOSED
             if (previousState != State.CLOSED) {
-                Log.d(tag, "[$sourceId] $previousState → CLOSED (success)")
+                Timber.tag(tag).d("[%s] %s → CLOSED (success)", sourceId, previousState)
             }
         }
     }
@@ -106,9 +106,9 @@ class ScraperCircuitBreaker(
 
             if (circuit.failureCount >= failureThreshold && circuit.state != State.OPEN) {
                 circuit.state = State.OPEN
-                Log.w(tag, "[$sourceId] → OPEN (${circuit.failureCount} consecutive failures)")
+                Timber.tag(tag).w("[%s] → OPEN (%d consecutive failures)", sourceId, circuit.failureCount)
             } else {
-                Log.d(tag, "[$sourceId] failure #${circuit.failureCount}/$failureThreshold")
+                Timber.tag(tag).d("[%s] failure #%d/%d", sourceId, circuit.failureCount, failureThreshold)
             }
         }
     }
@@ -118,7 +118,7 @@ class ScraperCircuitBreaker(
      */
     fun reset(sourceId: String) {
         circuits.remove(sourceId)
-        Log.d(tag, "[$sourceId] circuit reset")
+        Timber.tag(tag).d("[%s] circuit reset", sourceId)
     }
 
     /**
@@ -126,7 +126,7 @@ class ScraperCircuitBreaker(
      */
     fun resetAll() {
         circuits.clear()
-        Log.d(tag, "All circuits reset")
+        Timber.tag(tag).d("All circuits reset")
     }
 
     /**
@@ -144,6 +144,7 @@ class ScraperCircuitBreaker(
             recordSuccess(sourceId)
             result
         } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
             recordFailure(sourceId)
             throw e
         }

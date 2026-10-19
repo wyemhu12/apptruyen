@@ -21,6 +21,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.personal.apptruyen.ui.components.AnimatedEmptyState
 import com.personal.apptruyen.ui.components.ShimmerStoryGrid
 import com.personal.apptruyen.ui.components.StoryCardGrid
@@ -33,8 +34,8 @@ fun ExploreScreen(
     onNavigateToSourceLogin: (String) -> Unit = {},
     viewModel: ExploreViewModel = hiltViewModel(),
 ) {
-    val state by viewModel.state.collectAsState()
-    val loginRequiredSources by viewModel.loginRequiredSources.collectAsState()
+    val state by viewModel.state.collectAsStateWithLifecycle()
+    val loginRequiredSources by viewModel.loginRequiredSources.collectAsStateWithLifecycle()
     val gridState = rememberLazyGridState()
 
     // Infinity scroll: trigger loadMore when near bottom
@@ -237,7 +238,7 @@ fun ExploreScreen(
                         } else {
                             LazyVerticalGrid(
                                 state = gridState,
-                                columns = GridCells.Fixed(2),
+                                columns = GridCells.Adaptive(minSize = 150.dp),
                                 contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
                                 horizontalArrangement = Arrangement.spacedBy(12.dp),
                                 verticalArrangement = Arrangement.spacedBy(12.dp),
@@ -268,7 +269,7 @@ fun ExploreScreen(
 
                                 // Loading more indicator
                                 if (state.isLoadingMore) {
-                                    item(span = { GridItemSpan(2) }) {
+                                    item(span = { GridItemSpan(maxLineSpan) }) {
                                         Box(
                                             modifier =
                                                 Modifier

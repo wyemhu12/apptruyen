@@ -1,14 +1,13 @@
 package com.personal.apptruyen.ui.reader
 
-import android.app.Activity
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.LocalActivity
 import androidx.compose.animation.*
 import androidx.compose.animation.core.LinearEasing
-import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.animateScrollBy
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -21,6 +20,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -30,7 +30,6 @@ import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import androidx.compose.ui.input.nestedscroll.nestedScroll
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.TextStyle
@@ -40,6 +39,10 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.personal.apptruyen.data.model.PokemonMatchRange
 import com.personal.apptruyen.tts.TtsManager
 import com.personal.apptruyen.tts.TtsService
@@ -47,6 +50,9 @@ import com.personal.apptruyen.ui.theme.*
 import com.personal.apptruyen.ui.theme.rememberReaderThemeColors
 import kotlinx.collections.immutable.persistentListOf
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.isActive
 import kotlin.math.abs
@@ -57,28 +63,34 @@ fun ReaderScreen(
     onBack: () -> Unit,
     viewModel: ReaderViewModel = hiltViewModel(),
 ) {
-    val state by viewModel.state.collectAsState()
-    val ttsState by viewModel.ttsState.collectAsState()
-    // Force new LazyListState khi chương thay đổi → scroll position luôn bắt đầu từ 0
+    val state by viewModel.state.collectAsStateWithLifecycle()
+    val ttsState by viewModel.ttsState.collectAsStateWithLifecycle()
+    // Force new LazyListState khi chương thay đổi → scroll position luôn bắt đầu từ 0 trước khi khôi phục initialScrollIndex
     val listState = remember(state.currentChapterNumber) { LazyListState() }
     val hapticTop = LocalHapticFeedback.current
-    // Snackbar for per-story sendToGlobal feedback
-    var globalFeedback by remember { mutableStateOf<String?>(null) }
 
-    // Bug 5 fix: Auto-save scroll position with debounce (2s stability)
-    // Key theo chương để avoid saving position cũ cho chương mới
-    LaunchedEffect(state.currentChapterNumber) {
-        snapshotFlow { listState.firstVisibleItemIndex }
-            .collect { index ->
-                delay(2000) // debounce: wait 2s of stability before saving
-                viewModel.onIntent(ReaderIntent.SaveScrollPosition(index))
-            }
+    // [CRIT-10] Độ sáng màn hình đặt ở cấp gốc ReaderScreen để không bị reset khi đóng bảng Cài đặt
+    val currentActivity = LocalActivity.current
+    var brightness by rememberSaveable {
+        val windowBrightness = currentActivity?.window?.attributes?.screenBrightness ?: -1f
+        mutableFloatStateOf(if (windowBrightness in 0.01f..1f) windowBrightness else -1f)
     }
-
-    // Bug 5 fix: Save scroll position on exit
-    DisposableEffect(Unit) {
+    LaunchedEffect(currentActivity, brightness) {
+        if (brightness in 0.01f..1f) {
+            currentActivity?.window?.let { window ->
+                val lp = window.attributes
+                lp.screenBrightness = brightness
+                window.attributes = lp
+            }
+        }
+    }
+    DisposableEffect(currentActivity) {
         onDispose {
-            viewModel.onIntent(ReaderIntent.SaveScrollPosition(listState.firstVisibleItemIndex))
+            currentActivity?.window?.let { window ->
+                val lp = window.attributes
+                lp.screenBrightness = -1f
+                window.attributes = lp
+            }
         }
     }
 
@@ -89,15 +101,69 @@ fun ReaderScreen(
     // Overscroll threshold per swipe (in pixels)
     val overscrollThreshold: Float = with(LocalDensity.current) { 80.dp.toPx() }
 
-    // Split content into paragraphs for individual rendering
+    // Split content into paragraphs (ưu tiên paragraphs đã tách trên background dispatcher từ ViewModel)
     val paragraphs =
-        remember(state.content) {
-            if (state.content.isBlank()) {
-                emptyList()
-            } else {
-                TtsManager.splitIntoParagraphs(state.content)
+        if (state.paragraphs.isNotEmpty()) {
+            state.paragraphs
+        } else {
+            remember(state.content) {
+                if (state.content.isBlank()) {
+                    emptyList()
+                } else {
+                    TtsManager.splitIntoParagraphs(state.content)
+                }
             }
         }
+
+    // [CRIT-09] Khôi phục vị trí cuộn sau khi chương tải xong, sau đó mới lắng nghe snapshotFlow để lưu debounce
+    LaunchedEffect(state.currentChapterNumber, state.isLoading) {
+        if (state.isLoading || state.error != null || paragraphs.isEmpty()) return@LaunchedEffect
+        if (state.scrollToEnd) {
+            snapshotFlow { listState.layoutInfo.totalItemsCount }
+                .first { it > 2 }
+            listState.scrollToItem(listState.layoutInfo.totalItemsCount - 1)
+        } else if (state.initialScrollIndex > 0) {
+            val maxItemIndex = (paragraphs.size + 1).coerceAtLeast(0)
+            listState.scrollToItem(state.initialScrollIndex.coerceIn(0, maxItemIndex))
+        }
+        snapshotFlow { listState.firstVisibleItemIndex }
+            .distinctUntilChanged()
+            .drop(1)
+            .collectLatest { index ->
+                delay(1000L)
+                viewModel.onIntent(ReaderIntent.SaveScrollPosition(index))
+            }
+    }
+
+    // [CRIT-09] & [HIGH-10] Lưu vị trí cuộn và chốt phiên đọc khi ON_PAUSE / onDispose; mở lại phiên khi ON_RESUME
+    val lifecycleOwner = LocalLifecycleOwner.current
+    val currentState by rememberUpdatedState(state)
+    val currentParagraphs by rememberUpdatedState(paragraphs)
+    DisposableEffect(lifecycleOwner, listState) {
+        val observer =
+            LifecycleEventObserver { _, event ->
+                when (event) {
+                    Lifecycle.Event.ON_RESUME -> {
+                        viewModel.onIntent(ReaderIntent.OnReaderResumed)
+                    }
+                    Lifecycle.Event.ON_PAUSE -> {
+                        if (!currentState.isLoading && currentState.error == null && currentParagraphs.isNotEmpty()) {
+                            viewModel.onIntent(ReaderIntent.SaveScrollPosition(listState.firstVisibleItemIndex))
+                        }
+                        viewModel.onIntent(ReaderIntent.OnReaderPaused)
+                    }
+                    else -> Unit
+                }
+            }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+            if (!currentState.isLoading && currentState.error == null && currentParagraphs.isNotEmpty()) {
+                viewModel.onIntent(ReaderIntent.SaveScrollPosition(listState.firstVisibleItemIndex))
+            }
+            viewModel.onIntent(ReaderIntent.OnReaderPaused)
+        }
+    }
 
     // Auto-scroll to current paragraph when TTS is playing or paused (resume)
     LaunchedEffect(ttsState.currentParagraph, ttsState.isPlaying, ttsState.isPaused) {
@@ -107,19 +173,14 @@ fun ReaderScreen(
         }
     }
 
-    // Scroll to end chỉ khi quay về chương trước — scroll to top tự động nhờ listState reset
-    if (state.scrollToEnd) {
-        LaunchedEffect(state.currentChapterNumber) {
-            snapshotFlow { listState.layoutInfo.totalItemsCount }
-                .first { it > 2 }
-            listState.scrollToItem(listState.layoutInfo.totalItemsCount - 1)
-        }
-    }
-
-    // Auto-scroll
-    if (state.autoScrollEnabled && !state.showSettings && !state.showChapterList) {
-        LaunchedEffect(state.autoScrollSpeed, state.autoScrollEnabled) {
+    // [MED-02] Auto-scroll — tự động dừng khi chạm đáy chương
+    if (state.autoScrollEnabled && !state.showSettings && !state.showChapterList && !state.isLoading) {
+        LaunchedEffect(state.autoScrollSpeed, state.autoScrollEnabled, state.currentChapterNumber) {
             while (isActive) {
+                if (listState.layoutInfo.totalItemsCount > 0 && !listState.canScrollForward) {
+                    viewModel.onIntent(ReaderIntent.ToggleAutoScroll)
+                    break
+                }
                 val pixelsPerTick = state.autoScrollSpeed * 1.2f
                 listState.animateScrollBy(
                     pixelsPerTick,
@@ -180,37 +241,18 @@ fun ReaderScreen(
         }
     }
 
-    // Reader background & text colors based on theme
-    val (bgColor, textColor) =
-        when (state.readerTheme) {
-            ReaderViewModel.ReaderTheme.LIGHT -> Color(0xFFFFFBF5) to Color(0xFF1A1A1A)
-            ReaderViewModel.ReaderTheme.DARK -> Color(0xFF1C1B1F) to Color(0xFFF0ECF0)
-            ReaderViewModel.ReaderTheme.SEPIA -> SepiaBackground to Color(0xFF3E2C1A)
-        }
-
-    // Highlight color for active paragraph
-    val highlightColor =
-        when (state.readerTheme) {
-            ReaderViewModel.ReaderTheme.LIGHT -> Color(0xFFFFF3CD) // warm yellow
-            ReaderViewModel.ReaderTheme.DARK -> Color(0xFF3A3000) // dark gold
-            ReaderViewModel.ReaderTheme.SEPIA -> Color(0xFFD0B286) // deeper sepia contrast
-        }
-
+    // [HIGH-16] Reader colors centralized in ReaderThemeColors (WCAG AA compliant)
     val readerColors = rememberReaderThemeColors(state.readerTheme)
+    val bgColor = readerColors.backgroundColor
+    val textColor = readerColors.textColor
+    val highlightColor = readerColors.highlightBackground
+    val accentColor = readerColors.accentColor
     val topBarColor = readerColors.panelBackground
     val topBarContentColor = readerColors.panelContentColor
 
-    // Animated padding for bars visibility
-    val topPadding by animateDpAsState(
-        targetValue = if (state.areBarsVisible) 64.dp else 0.dp,
-        animationSpec = tween(300),
-        label = "topPadding",
-    )
-    val bottomPadding by animateDpAsState(
-        targetValue = if (state.areBarsVisible) 140.dp else 0.dp,
-        animationSpec = tween(300),
-        label = "bottomPadding",
-    )
+    // [MED-01] Cố định contentPadding để ẩn/hiện thanh công cụ không làm nhảy văn bản 64dp
+    val topPadding = 64.dp
+    val bottomPadding = 140.dp
 
     // Show bars when settings panel is opened
     LaunchedEffect(state.showSettings) {
@@ -242,7 +284,9 @@ fun ReaderScreen(
             nestedScrollConnection = nestedScrollConnection,
             topPadding = topPadding,
             bottomPadding = bottomPadding,
+            bgColor = bgColor,
             textColor = textColor,
+            accentColor = accentColor,
             highlightColor = highlightColor,
             prevSwipeCount = prevSwipeCount,
             nextSwipeCount = nextSwipeCount,
@@ -342,27 +386,6 @@ fun ReaderScreen(
             exit = slideOutVertically(targetOffsetY = { it }),
             modifier = Modifier.align(Alignment.BottomCenter),
         ) {
-            val currentActivity = LocalContext.current as? Activity
-            val initialBrightness =
-                remember {
-                    currentActivity?.window?.attributes?.screenBrightness ?: -1f
-                }
-            var brightness by remember {
-                mutableFloatStateOf(
-                    if (initialBrightness < 0f) 0.5f else initialBrightness,
-                )
-            }
-
-            // Bug 1 fix: Restore system brightness when leaving settings / screen
-            DisposableEffect(Unit) {
-                onDispose {
-                    currentActivity?.let { activity ->
-                        val lp = activity.window.attributes
-                        lp.screenBrightness = -1f // -1f = system default
-                        activity.window.attributes = lp
-                    }
-                }
-            }
             ReaderSettingsPanel(
                 fontSize = state.fontSize,
                 theme = state.readerTheme,
@@ -370,7 +393,7 @@ fun ReaderScreen(
                 textReplacementEnabled = state.textReplacementEnabled,
                 autoFormatEnabled = state.autoFormatEnabled,
                 lineSpacing = state.lineSpacing,
-                brightness = brightness,
+                brightness = if (brightness < 0f) 0.5f else brightness,
                 fontFamily = state.fontFamily,
                 storyReplacementsEnabled = state.storyReplacementsEnabled,
                 storyReplacements = state.storyReplacements,
@@ -378,12 +401,7 @@ fun ReaderScreen(
                 autoScrollSpeed = state.autoScrollSpeed,
                 pokemonLookupEnabled = state.pokemonLookupEnabled,
                 onBrightnessChange = { value ->
-                    brightness = value
-                    currentActivity?.let { activity ->
-                        val lp = activity.window.attributes
-                        lp.screenBrightness = value
-                        activity.window.attributes = lp
-                    }
+                    brightness = value.coerceIn(0.01f, 1f)
                 },
                 onFontSizeChange = { viewModel.onIntent(ReaderIntent.SetFontSize(it)) },
                 onThemeChange = { viewModel.onIntent(ReaderIntent.SetReaderTheme(it)) },
@@ -435,15 +453,15 @@ fun ReaderScreen(
             }
         }
 
-        // Global feedback snackbar (sendToGlobal)
-        LaunchedEffect(globalFeedback) {
-            if (globalFeedback != null) {
+        // [HIGH-14] Global feedback snackbar (sendToGlobal)
+        LaunchedEffect(state.snackbarMessage) {
+            if (state.snackbarMessage != null) {
                 delay(3000)
-                globalFeedback = null
+                viewModel.onIntent(ReaderIntent.ClearSnackbar)
             }
         }
         AnimatedVisibility(
-            visible = globalFeedback != null,
+            visible = state.snackbarMessage != null,
             enter = fadeIn() + slideInVertically { -it },
             exit = fadeOut() + slideOutVertically { -it },
             modifier = Modifier.align(Alignment.TopCenter),
@@ -452,12 +470,12 @@ fun ReaderScreen(
                 modifier = Modifier.padding(16.dp),
                 shape = RoundedCornerShape(12.dp),
                 action = {
-                    TextButton(onClick = { globalFeedback = null }) {
+                    TextButton(onClick = { viewModel.onIntent(ReaderIntent.ClearSnackbar) }) {
                         Text("Đóng", color = MaterialTheme.colorScheme.inversePrimary)
                     }
                 },
             ) {
-                Text(globalFeedback ?: "")
+                Text(state.snackbarMessage ?: "")
             }
         }
 
@@ -491,7 +509,9 @@ private fun ReaderContentArea(
     nestedScrollConnection: NestedScrollConnection,
     topPadding: androidx.compose.ui.unit.Dp,
     bottomPadding: androidx.compose.ui.unit.Dp,
+    bgColor: Color,
     textColor: Color,
+    accentColor: Color,
     highlightColor: Color,
     prevSwipeCount: Int,
     nextSwipeCount: Int,
@@ -516,6 +536,7 @@ private fun ReaderContentArea(
                     CircularProgressIndicator(
                         modifier = Modifier.size(36.dp),
                         strokeWidth = 3.dp,
+                        color = accentColor,
                     )
                     Spacer(modifier = Modifier.height(16.dp))
                     Text(
@@ -542,12 +563,19 @@ private fun ReaderContentArea(
                         OutlinedButton(
                             onClick = onBack,
                             shape = RoundedCornerShape(12.dp),
+                            border = BorderStroke(1.dp, accentColor),
+                            colors = ButtonDefaults.outlinedButtonColors(contentColor = accentColor),
                         ) {
                             Text("Quay lại")
                         }
                         Button(
                             onClick = onRetry,
                             shape = RoundedCornerShape(12.dp),
+                            colors =
+                                ButtonDefaults.buttonColors(
+                                    containerColor = accentColor,
+                                    contentColor = bgColor,
+                                ),
                         ) {
                             Text("Thử lại")
                         }
@@ -572,114 +600,118 @@ private fun ReaderContentArea(
                     fontWeight = FontWeight.Medium,
                 )
 
-            // Continuous scroll: LazyColumn
-            LazyColumn(
-                state = listState,
-                modifier =
-                    Modifier
-                        .fillMaxSize()
-                        .nestedScroll(nestedScrollConnection),
-                contentPadding =
-                    PaddingValues(
-                        start = 20.dp,
-                        end = 20.dp,
-                        top = topPadding + 16.dp,
-                        bottom = bottomPadding + 16.dp,
-                    ),
-                verticalArrangement = Arrangement.spacedBy(4.dp),
-            ) {
-                // Previous chapter section at top
-                item {
-                    PrevChapterSection(
-                        hasPrevChapter = state.hasPrevChapter,
-                        isLoadingPrevChapter = state.isLoadingPrevChapter,
-                        readerTheme = state.readerTheme,
-                        textColor = textColor,
-                        swipeCount = prevSwipeCount,
-                    )
-                }
-
-                // Chapter title
-                item {
-                    Text(
-                        text = state.chapterTitle,
-                        style =
-                            MaterialTheme.typography.headlineSmall.copy(
-                                fontFamily = resolvedFont,
-                                fontWeight = FontWeight.Bold,
-                            ),
-                        color = textColor,
-                        modifier = Modifier.padding(bottom = 16.dp),
-                    )
-                }
-
-                // Paragraphs with highlight and long-press
-                itemsIndexed(paragraphs) { index, paragraph ->
-                    val isActive =
-                        index == ttsState.currentParagraph &&
-                            (ttsState.isPlaying || ttsState.isPaused)
-
-                    val bgColor =
-                        if (isActive) {
-                            animateColorAsState(
-                                targetValue = highlightColor,
-                                animationSpec = tween(400),
-                                label = "paragraphHighlight",
-                            ).value
-                        } else {
-                            Color.Transparent
-                        }
-
-                    val baseModifier =
+            val listContent: @Composable () -> Unit = {
+                LazyColumn(
+                    state = listState,
+                    modifier =
                         Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(8.dp))
-                            .background(bgColor)
+                            .fillMaxSize()
+                            .nestedScroll(nestedScrollConnection),
+                    contentPadding =
+                        PaddingValues(
+                            start = 20.dp,
+                            end = 20.dp,
+                            top = topPadding + 16.dp,
+                            bottom = bottomPadding + 16.dp,
+                        ),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    // Previous chapter section at top
+                    item(key = "prev_chapter_section") {
+                        PrevChapterSection(
+                            hasPrevChapter = state.hasPrevChapter,
+                            isLoadingPrevChapter = state.isLoadingPrevChapter,
+                            readerTheme = state.readerTheme,
+                            textColor = textColor,
+                            swipeCount = prevSwipeCount,
+                        )
+                    }
 
-                    if (copyMode) {
-                        SelectionContainer {
+                    // Chapter title
+                    item(key = "chapter_title") {
+                        Text(
+                            text = state.chapterTitle,
+                            style =
+                                MaterialTheme.typography.headlineSmall.copy(
+                                    fontFamily = resolvedFont,
+                                    fontWeight = FontWeight.Bold,
+                                ),
+                            color = textColor,
+                            modifier = Modifier.padding(bottom = 16.dp),
+                        )
+                    }
+
+                    // Paragraphs with highlight and long-press
+                    itemsIndexed(
+                        items = paragraphs,
+                        key = { index, _ -> "paragraph_$index" },
+                    ) { index, paragraph ->
+                        val isActive =
+                            index == ttsState.currentParagraph &&
+                                (ttsState.isPlaying || ttsState.isPaused)
+
+                        val paragraphBgColor by animateColorAsState(
+                            targetValue = if (isActive) highlightColor else Color.Transparent,
+                            animationSpec = tween(400),
+                            label = "paragraphHighlight",
+                        )
+
+                        val baseModifier =
+                            Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(paragraphBgColor)
+
+                        if (copyMode) {
                             Text(
                                 text = paragraph,
                                 style = textStyle,
                                 modifier =
                                     baseModifier
-                                        .clickable { onToggleBars() }
                                         .padding(vertical = 8.dp, horizontal = 6.dp),
                             )
+                        } else {
+                            val paragraphMatches =
+                                if (state.pokemonLookupEnabled) {
+                                    state.paragraphPokemonMatches[index] ?: persistentListOf()
+                                } else {
+                                    persistentListOf()
+                                }
+                            ReaderParagraphItem(
+                                paragraph = paragraph,
+                                matches = paragraphMatches,
+                                textStyle = textStyle,
+                                readerTheme = state.readerTheme,
+                                modifier = baseModifier,
+                                onToggleBars = onToggleBars,
+                                onLongPressSeekAndPlay = {
+                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                    onSeekAndPlay(index)
+                                },
+                                onPokemonClick = onPokemonClick,
+                            )
                         }
-                    } else {
-                        val paragraphMatches =
-                            if (state.pokemonLookupEnabled) {
-                                state.paragraphPokemonMatches[index] ?: persistentListOf()
-                            } else {
-                                persistentListOf()
-                            }
-                        ReaderParagraphItem(
-                            paragraph = paragraph,
-                            matches = paragraphMatches,
-                            textStyle = textStyle,
+                    }
+
+                    // Next chapter section at bottom
+                    item(key = "next_chapter_section") {
+                        NextChapterSection(
+                            hasNextChapter = state.hasNextChapter,
+                            isLoadingNextChapter = state.isLoadingNextChapter,
                             readerTheme = state.readerTheme,
-                            modifier = baseModifier,
-                            onToggleBars = onToggleBars,
-                            onLongPressSeekAndPlay = {
-                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                onSeekAndPlay(index)
-                            },
-                            onPokemonClick = onPokemonClick,
+                            textColor = textColor,
+                            swipeCount = nextSwipeCount,
                         )
                     }
                 }
+            }
 
-                // Next chapter section at bottom
-                item {
-                    NextChapterSection(
-                        hasNextChapter = state.hasNextChapter,
-                        isLoadingNextChapter = state.isLoadingNextChapter,
-                        readerTheme = state.readerTheme,
-                        textColor = textColor,
-                        swipeCount = nextSwipeCount,
-                    )
+            if (copyMode) {
+                SelectionContainer {
+                    listContent()
                 }
+            } else {
+                listContent()
             }
         }
     }

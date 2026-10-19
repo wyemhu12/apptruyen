@@ -7,10 +7,14 @@ import kotlinx.coroutines.flow.Flow
 
 @Dao
 interface ChapterDao {
-    @Query("SELECT * FROM chapters WHERE storyId = :storyId ORDER BY chapterNumber ASC")
+    @Query(
+        "SELECT storyId, chapterNumber, title, url, NULL AS content, isDownloaded, downloadedTimestamp FROM chapters WHERE storyId = :storyId ORDER BY chapterNumber ASC",
+    )
     fun getChaptersByStory(storyId: String): Flow<List<ChapterEntity>>
 
-    @Query("SELECT * FROM chapters WHERE storyId = :storyId ORDER BY chapterNumber ASC")
+    @Query(
+        "SELECT storyId, chapterNumber, title, url, NULL AS content, isDownloaded, downloadedTimestamp FROM chapters WHERE storyId = :storyId ORDER BY chapterNumber ASC",
+    )
     suspend fun getChaptersByStoryOnce(storyId: String): List<ChapterEntity>
 
     @Query("SELECT * FROM chapters WHERE storyId = :storyId AND chapterNumber = :chapterNumber")
@@ -19,8 +23,24 @@ interface ChapterDao {
         chapterNumber: Int,
     ): ChapterEntity?
 
-    @Query("SELECT * FROM chapters WHERE storyId = :storyId AND isDownloaded = 1 ORDER BY chapterNumber ASC")
+    @Query(
+        "SELECT storyId, chapterNumber, title, url, NULL AS content, isDownloaded, downloadedTimestamp FROM chapters WHERE storyId = :storyId AND isDownloaded = 1 ORDER BY chapterNumber ASC",
+    )
     fun getDownloadedChapters(storyId: String): Flow<List<ChapterEntity>>
+
+    @Query(
+        """
+        SELECT * FROM chapters 
+        WHERE storyId = :storyId AND isDownloaded = 1 AND content IS NOT NULL AND TRIM(content) != '' 
+        ORDER BY chapterNumber ASC 
+        LIMIT :limit OFFSET :offset
+    """,
+    )
+    suspend fun getDownloadedChaptersWithContentPaged(
+        storyId: String,
+        limit: Int,
+        offset: Int,
+    ): List<ChapterEntity>
 
     @Query("SELECT COUNT(*) FROM chapters WHERE storyId = :storyId AND isDownloaded = 1")
     fun getDownloadedChapterCount(storyId: String): Flow<Int>
@@ -67,7 +87,7 @@ interface ChapterDao {
 
     /**
      * Save chapter content with UPSERT: insert row if not exists, then update content.
-     * Đảm bảo content không bị mất nếu chapter row chưa tồn tại.
+     * Đảm bảo content, title và url không bị mất nếu chapter row chưa tồn tại.
      */
     @Transaction
     suspend fun saveChapterContent(
@@ -75,18 +95,28 @@ interface ChapterDao {
         chapterNumber: Int,
         content: String,
         timestamp: Long = System.currentTimeMillis(),
+        title: String = "Chương $chapterNumber",
+        url: String = "",
     ) {
+        val safeTitle = title.ifBlank { "Chương $chapterNumber" }
         // Ensure row exists (IGNORE if already present)
         insertChapterIfNotExists(
             ChapterEntity(
                 storyId = storyId,
                 chapterNumber = chapterNumber,
-                title = "Chương $chapterNumber",
-                url = "",
+                title = safeTitle,
+                url = url,
             ),
         )
-        // Update content
-        updateChapterContent(storyId, chapterNumber, content, timestamp)
+        // Update content and fill blank metadata if needed
+        updateChapterContent(
+            storyId = storyId,
+            chapterNumber = chapterNumber,
+            content = content,
+            timestamp = timestamp,
+            title = safeTitle,
+            url = url,
+        )
     }
 
     @Insert(onConflict = OnConflictStrategy.IGNORE)
@@ -95,7 +125,11 @@ interface ChapterDao {
     @Query(
         """
         UPDATE chapters 
-        SET content = :content, isDownloaded = 1, downloadedTimestamp = :timestamp 
+        SET content = :content,
+            isDownloaded = 1,
+            downloadedTimestamp = :timestamp,
+            title = CASE WHEN TRIM(title) = '' THEN :title ELSE title END,
+            url = CASE WHEN TRIM(url) = '' THEN :url ELSE url END
         WHERE storyId = :storyId AND chapterNumber = :chapterNumber
     """,
     )
@@ -104,6 +138,23 @@ interface ChapterDao {
         chapterNumber: Int,
         content: String,
         timestamp: Long = System.currentTimeMillis(),
+        title: String = "",
+        url: String = "",
+    )
+
+    @Query(
+        """
+        UPDATE chapters 
+        SET content = :content, isDownloaded = 1, downloadedTimestamp = :timestamp 
+        WHERE storyId = :storyId AND chapterNumber = :chapterNumber 
+          AND (isDownloaded = 0 OR content IS NULL OR content = '')
+    """,
+    )
+    suspend fun restoreChapterContentIfEmpty(
+        storyId: String,
+        chapterNumber: Int,
+        content: String,
+        timestamp: Long,
     )
 
     @Query(
@@ -120,7 +171,9 @@ interface ChapterDao {
     @Query("DELETE FROM chapters WHERE storyId = :storyId")
     suspend fun deleteChaptersByStory(storyId: String)
 
-    @Query("SELECT * FROM chapters WHERE storyId = :storyId ORDER BY chapterNumber ASC LIMIT :limit OFFSET :offset")
+    @Query(
+        "SELECT storyId, chapterNumber, title, url, NULL AS content, isDownloaded, downloadedTimestamp FROM chapters WHERE storyId = :storyId ORDER BY chapterNumber ASC LIMIT :limit OFFSET :offset",
+    )
     suspend fun getChaptersPaged(
         storyId: String,
         limit: Int,
@@ -131,7 +184,7 @@ interface ChapterDao {
     suspend fun getChapterCount(storyId: String): Int
 
     @Query(
-        "SELECT * FROM chapters WHERE storyId = :storyId AND chapterNumber IN (:chapterNumbers) ORDER BY chapterNumber ASC",
+        "SELECT storyId, chapterNumber, title, url, NULL AS content, isDownloaded, downloadedTimestamp FROM chapters WHERE storyId = :storyId AND chapterNumber IN (:chapterNumbers) ORDER BY chapterNumber ASC",
     )
     suspend fun getChaptersByNumbers(
         storyId: String,

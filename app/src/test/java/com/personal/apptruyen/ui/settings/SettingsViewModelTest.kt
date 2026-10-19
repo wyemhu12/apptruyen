@@ -32,6 +32,9 @@ class SettingsViewModelTest {
         backupRepository = mockk(relaxed = true)
         authRepository = mockk(relaxed = true)
         coEvery { authRepository.isLoggedIn(any()) } returns false
+        every { authRepository.getAuthState(any()) } answers {
+            kotlinx.coroutines.flow.MutableStateFlow(authRepository.isLoggedIn(firstArg()))
+        }
     }
 
     @AfterEach
@@ -109,4 +112,80 @@ class SettingsViewModelTest {
         assertEquals(AppThemeMode.SYSTEM, defaultState.appThemeMode)
         assertTrue(defaultState.dynamicColor)
     }
+
+    @Test
+    fun `mapBackupErrorMessage hides raw English exception message and returns Vietnamese error`() =
+        runTest {
+            every { dataStore.data } returns flowOf(preferencesOf())
+            viewModel = SettingsViewModel(dataStore, backupRepository, authRepository)
+
+            val rawException = java.io.IOException("Unexpected EOF at offset 128 in stream")
+            assertEquals(
+                "Không thể khôi phục dữ liệu. Tệp sao lưu không hợp lệ hoặc bị hỏng.",
+                viewModel.mapBackupErrorMessage(isExport = false, error = rawException),
+            )
+
+            val vietnameseIllegalArg = IllegalArgumentException("Tệp sao lưu không hợp lệ: thiếu metadata.json")
+            assertEquals(
+                "Tệp sao lưu không hợp lệ: thiếu metadata.json",
+                viewModel.mapBackupErrorMessage(isExport = false, error = vietnameseIllegalArg),
+            )
+        }
+
+    @Test
+    fun `enabledSources filters out legacy source IDs and toggleSource protects last active source`() =
+        runTest {
+            val prefsFlow =
+                kotlinx.coroutines.flow.MutableStateFlow<Preferences>(
+                    preferencesOf(SettingsKeys.ENABLED_SOURCES to "truyencom,truyenfull,tangthuvien"),
+                )
+            every { dataStore.data } returns prefsFlow
+            coEvery { dataStore.updateData(any()) } coAnswers {
+                val transform = firstArg<suspend (Preferences) -> Preferences>()
+                val updated = transform(prefsFlow.value)
+                prefsFlow.value = updated
+                updated
+            }
+
+            viewModel = SettingsViewModel(dataStore, backupRepository, authRepository)
+            val initialState = viewModel.state.first()
+            assertEquals(setOf("tangthuvien"), initialState.enabledSources)
+            assertEquals(1, initialState.enabledSources.size)
+
+            // Trying to disable the last remaining source must keep it enabled
+            viewModel.toggleSource("tangthuvien")
+            advanceUntilIdle()
+            assertEquals(setOf("tangthuvien"), viewModel.state.first().enabledSources)
+
+            // If prefs only contain legacy IDs, fallback to ALL_SOURCES
+            prefsFlow.value = preferencesOf(SettingsKeys.ENABLED_SOURCES to "truyencom,truyenfull")
+            advanceUntilIdle()
+            assertEquals(SettingsViewModel.ALL_SOURCES, viewModel.state.first().enabledSources)
+            assertEquals(
+                3,
+                viewModel.state
+                    .first()
+                    .enabledSources.size,
+            )
+        }
+
+    @Test
+    fun `observing authRepository getAuthState updates isWikidichLoggedIn reactively`() =
+        runTest {
+            val authFlow = kotlinx.coroutines.flow.MutableStateFlow(false)
+            every { authRepository.getAuthState("wikidich") } returns authFlow
+            coEvery { authRepository.isLoggedIn("wikidich") } answers { authFlow.value }
+            every { dataStore.data } returns flowOf(preferencesOf())
+
+            viewModel = SettingsViewModel(dataStore, backupRepository, authRepository)
+            assertFalse(viewModel.state.first().isWikidichLoggedIn)
+
+            authFlow.value = true
+            advanceUntilIdle()
+            assertTrue(viewModel.state.first().isWikidichLoggedIn)
+
+            authFlow.value = false
+            advanceUntilIdle()
+            assertFalse(viewModel.state.first().isWikidichLoggedIn)
+        }
 }

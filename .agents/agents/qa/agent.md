@@ -113,8 +113,8 @@ Severity: làm yếu test không có căn cứ Loại C là `[MAJOR]`; thêm `@D
 
 ## Runtime Fallback Model
 
-Mặc định `claude-4.6-opus`. Khi gặp quota/429 thì Orchestrator chuyển sang `gemini-3.8-flash` (thinking tối đa), và đầu báo cáo BẮT BUỘC ghi:
-`⚠️ QA report này chạy trên model fallback [FALLBACK_MODEL: gemini-3.8-flash]. Kết quả có thể cần xác minh bổ sung.`
+Mặc định `claude-4.6-opus`. Khi gặp quota/429 thì Orchestrator chuyển sang `gemini-4-argon` (thinking tối đa High/Max), và đầu báo cáo BẮT BUỘC ghi:
+`⚠️ QA report này chạy trên model fallback [FALLBACK_MODEL: gemini-4-argon]. Kết quả có thể cần xác minh bổ sung.`
 
 ## ALLOWLIST
 

@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.MenuBook
@@ -25,9 +26,11 @@ import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil3.compose.SubcomposeAsyncImage
 import coil3.request.ImageRequest
 import com.personal.apptruyen.data.model.Chapter
@@ -44,7 +47,7 @@ fun StoryDetailScreen(
     onReadChapter: (String, Int, String) -> Unit, // storyId, chapterNumber, chapterUrl
     viewModel: StoryDetailViewModel = hiltViewModel(),
 ) {
-    val state by viewModel.state.collectAsState()
+    val state by viewModel.state.collectAsStateWithLifecycle()
     var isDescriptionExpanded by remember { mutableStateOf(false) }
     var showDownloadDialog by remember { mutableStateOf(false) }
     var isFabVisible by remember { mutableStateOf(true) }
@@ -128,13 +131,7 @@ fun StoryDetailScreen(
             state.story != null -> {
                 val story = state.story ?: return@Scaffold
                 val progress = state.readingProgress
-                val lastChapterNum = progress?.lastChapterNumber
-                val lastReadChapter =
-                    if (lastChapterNum != null) {
-                        state.chapters.find { it.chapterNumber == lastChapterNum }
-                    } else {
-                        null
-                    }
+                val lastChapterNum = state.lastReadChapter
 
                 LazyColumn(
                     modifier = Modifier.fillMaxSize(),
@@ -170,8 +167,12 @@ fun StoryDetailScreen(
                         ActionButtonsSection(
                             story = story,
                             firstChapter = state.chapters.firstOrNull(),
-                            lastReadChapter = lastReadChapter,
+                            lastReadChapterNumber = lastChapterNum,
+                            hasChapters = state.chapters.isNotEmpty(),
                             onReadChapter = onReadChapter,
+                            onContinueReading = { chNum ->
+                                onReadChapter(story.id, chNum, viewModel.resolveChapterUrlForReading(chNum))
+                            },
                             onDownloadRange = { showDownloadDialog = true },
                             onDownloadAll = { viewModel.downloadAll() },
                         )
@@ -309,7 +310,7 @@ fun StoryDetailScreen(
     )
 
     // Download range dialog
-    if (showDownloadDialog) {
+    if (showDownloadDialog && state.chapters.isNotEmpty()) {
         DownloadRangeDialog(
             totalChapters = state.chapters.size,
             onDismiss = { showDownloadDialog = false },
@@ -505,8 +506,10 @@ private fun HeroSection(story: Story) {
 private fun ActionButtonsSection(
     story: Story,
     firstChapter: Chapter?,
-    lastReadChapter: Chapter?,
+    lastReadChapterNumber: Int?,
+    hasChapters: Boolean,
     onReadChapter: (String, Int, String) -> Unit,
+    onContinueReading: (Int) -> Unit,
     onDownloadRange: () -> Unit,
     onDownloadAll: () -> Unit,
 ) {
@@ -531,10 +534,10 @@ private fun ActionButtonsSection(
         }
 
         // Continue reading
-        if (lastReadChapter != null) {
+        if (lastReadChapterNumber != null) {
             FilledTonalButton(
                 onClick = {
-                    onReadChapter(story.id, lastReadChapter.chapterNumber, lastReadChapter.url)
+                    onContinueReading(lastReadChapterNumber)
                 },
                 modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(14.dp),
@@ -542,7 +545,7 @@ private fun ActionButtonsSection(
             ) {
                 Icon(Icons.Default.PlayArrow, contentDescription = null)
                 Spacer(modifier = Modifier.width(8.dp))
-                Text("Tiếp tục đọc", style = MaterialTheme.typography.labelLarge)
+                Text("Tiếp tục đọc (Chương $lastReadChapterNumber)", style = MaterialTheme.typography.labelLarge)
             }
         }
 
@@ -553,6 +556,7 @@ private fun ActionButtonsSection(
         ) {
             OutlinedButton(
                 onClick = onDownloadRange,
+                enabled = hasChapters,
                 modifier = Modifier.weight(1f),
                 shape = RoundedCornerShape(14.dp),
                 contentPadding = PaddingValues(vertical = 12.dp),
@@ -567,6 +571,7 @@ private fun ActionButtonsSection(
             }
             OutlinedButton(
                 onClick = onDownloadAll,
+                enabled = hasChapters,
                 modifier = Modifier.weight(1f),
                 shape = RoundedCornerShape(14.dp),
                 contentPadding = PaddingValues(vertical = 12.dp),
@@ -632,7 +637,7 @@ private fun DownloadProgressCard(
             Spacer(modifier = Modifier.height(8.dp))
             LinearProgressIndicator(
                 progress = {
-                    if (progress.total > 0) progress.current.toFloat() / progress.total else 0f
+                    if (progress.total > 0) progress.processed.toFloat() / progress.total else 0f
                 },
                 modifier =
                     Modifier
@@ -829,7 +834,10 @@ private fun ChapterJumpSheet(
                     modifier = Modifier.heightIn(max = 400.dp),
                     verticalArrangement = Arrangement.spacedBy(4.dp),
                 ) {
-                    itemsIndexed(filteredChapters) { _, chapter ->
+                    itemsIndexed(
+                        items = filteredChapters,
+                        key = { index, ch -> "jump_${ch.chapterNumber}_$index" },
+                    ) { _, chapter ->
                         Surface(
                             onClick = {
                                 showChapterSheet = false
@@ -877,8 +885,18 @@ private fun DownloadRangeDialog(
     onDismiss: () -> Unit,
     onDownload: (Int, Int) -> Unit,
 ) {
-    var fromText by remember { mutableStateOf("1") }
-    var toText by remember { mutableStateOf(totalChapters.toString()) }
+    val safeMaxChapters = totalChapters.coerceAtLeast(1)
+    var fromText by remember(safeMaxChapters) { mutableStateOf("1") }
+    var toText by remember(safeMaxChapters) { mutableStateOf(safeMaxChapters.toString()) }
+    val parsedFrom = fromText.trim().toIntOrNull()
+    val parsedTo = toText.trim().toIntOrNull()
+    val isValidRange =
+        totalChapters > 0 &&
+            parsedFrom != null &&
+            parsedTo != null &&
+            parsedFrom in 1..safeMaxChapters &&
+            parsedTo in 1..safeMaxChapters &&
+            parsedFrom <= parsedTo
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -889,7 +907,7 @@ private fun DownloadRangeDialog(
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 Text(
-                    "Chọn khoảng chương muốn tải (1 - $totalChapters)",
+                    "Chọn khoảng chương muốn tải (1 - $safeMaxChapters)",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -903,6 +921,7 @@ private fun DownloadRangeDialog(
                         modifier = Modifier.weight(1f),
                         label = { Text("Từ") },
                         singleLine = true,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                         shape = RoundedCornerShape(12.dp),
                     )
                     Text("→", style = MaterialTheme.typography.titleMedium)
@@ -912,6 +931,7 @@ private fun DownloadRangeDialog(
                         modifier = Modifier.weight(1f),
                         label = { Text("Đến") },
                         singleLine = true,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                         shape = RoundedCornerShape(12.dp),
                     )
                 }
@@ -920,15 +940,11 @@ private fun DownloadRangeDialog(
         confirmButton = {
             Button(
                 onClick = {
-                    var from = (fromText.toIntOrNull() ?: 1).coerceIn(1, totalChapters)
-                    var to = (toText.toIntOrNull() ?: totalChapters).coerceIn(1, totalChapters)
-                    if (from > to) {
-                        val tmp = from
-                        from = to
-                        to = tmp
-                    }
-                    onDownload(from, to)
+                    val from = (parsedFrom ?: 1).coerceIn(1, safeMaxChapters)
+                    val to = (parsedTo ?: safeMaxChapters).coerceIn(1, safeMaxChapters)
+                    onDownload(minOf(from, to), maxOf(from, to))
                 },
+                enabled = isValidRange,
                 shape = RoundedCornerShape(12.dp),
             ) {
                 Text("Tải xuống")

@@ -1,6 +1,6 @@
 # Kiến trúc & Cấu trúc dự án
 
-> **Cập nhật lần cuối:** 2026-10-15 21:18
+> **Cập nhật lần cuối:** 2026-10-19 04:20
 
 ## Tổng quan kiến trúc
 
@@ -27,8 +27,9 @@
 │  ├─ TangThuVienScrp. │   (Story/Chapter/         │
 │  ├─ SsTruyenScraper  │    ReadingProgress/Stats  │
 │  ├─ WikidichScraper  │    + BundledSQLiteDriver) │
-│  ├─ auth/ & cookie/  │   Assets:                 │
-│  (OkHttp + Jsoup)    │   └─ pokemon_pokedex.json │
+│  ├─ ResilientDohDns  │   Assets:                 │
+│  ├─ auth/ & cookie/  │   └─ pokemon_pokedex.json │
+│  (OkHttp + Jsoup)    │                           │
 ├──────────────────────┴──────────────────────────┤
 │              Cross-cutting Concerns               │
 │   Hilt DI │ TtsService (Media3) │ DownloadService │
@@ -44,7 +45,7 @@ app/src/main/
 │   └── pokemon_pokedex.json     # Từ điển 1.025 loài Pokémon (1.309 hình thái, tên Việt/Hán-Việt/Anh/Trung/Nhật + đồng nhân)
 └── java/com/personal/apptruyen/
 ├── di/                          # Hilt DI modules
-│   ├── AppModule.kt             # Provides Room 3 DB (BundledSQLiteDriver), DatabaseTransactionRunner, DAOs, CoroutineScope, CookieStore
+│   ├── AppModule.kt             # Provides Room 3 DB (BundledSQLiteDriver), DatabaseTransactionRunner, DAOs, CoroutineScope, CookieStore, OkHttpClient (ResilientDohDns)
 │   ├── RepositoryModule.kt      # @Binds IStoryRepository, ISourceAuthRepository, IPokemonRepository
 │   ├── ScraperModule.kt         # @Binds @IntoSet: TangThuVien + SsTruyen (sstruyen.pics) + Wikidich → Set<StorySource>
 │   └── ApplicationScope.kt     # @Qualifier cho app-scoped CoroutineScope
@@ -67,31 +68,32 @@ app/src/main/
 │   │   │   ├── SearchHistoryEntity.kt # Lịch sử tìm kiếm
 │   │   │   └── DownloadStats.kt       # Data class kết quả thống kê tải
 │   │   ├── StoryDao.kt
-│   │   ├── ChapterDao.kt
+│   │   ├── ChapterDao.kt              # Chiếu nhẹ (NULL AS content) cho truy vấn danh sách, phân trang cho backup
 │   │   ├── ReadingProgressDao.kt
 │   │   ├── ReadingStatsDao.kt         # DAO thống kê đọc
 │   │   ├── SearchHistoryDao.kt        # DAO lịch sử tìm kiếm
 │   │   ├── DatabaseTransactionRunner.kt # Seam thực thi withWriteTransaction nguyên tử
-│   │   ├── SettingsDataStore.kt    # DataStore singleton (shared, SourceIds)
+│   │   ├── SettingsDataStore.kt    # DataStore singleton (shared, SourceIds, getIntSafe, healCorruptedIntPreferences)
 │   │   └── AppDatabase.kt          # Room 3 DB v9 + SQLiteConnection migrations
 │   ├── remote/                  # Web scraping (multi-source) & auth
 │   │   ├── StorySource.kt       # Interface chung cho mọi nguồn scrape
-│   │   ├── BaseScraper.kt       # Abstract base — shared HTTP, cache, retry, HTML cleanup
-│   │   ├── TangThuVienScraper.kt # Scrape truyen.tangthuvien.vn (extends BaseScraper)
+│   │   ├── BaseScraper.kt       # Abstract base — shared HTTP, cache TTL 10m (CACHE_TTL_MS), selective retry, HTTPS cover upgrade
+│   │   ├── TangThuVienScraper.kt # Scrape tangthuvien.org (extends BaseScraper, customBaseUrl)
 │   │   ├── SsTruyenScraper.kt    # Scrape sstruyen.pics (extends BaseScraper)
-│   │   ├── WikidichScraper.kt    # Scrape wikicv.org (chữ ký fuzzySign + AJAX pagination)
-│   │   ├── ScraperException.kt  # Sealed error hierarchy (7 subtypes, LoginRequiredException)
+│   │   ├── WikidichScraper.kt    # Scrape wikicv.org (chữ ký fuzzySign + AJAX pagination + fetchDocumentWithRetry)
+│   │   ├── ResilientDohDns.kt    # DNS-over-HTTPS (Cloudflare 1.1.1.1/1.0.0.1 + Google 8.8.8.8 + System DNS fallback) vượt chặn DNS WiFi công ty
+│   │   ├── ScraperException.kt  # Sealed error hierarchy (7 subtypes, LoginRequiredException, 100% thông báo tiếng Việt)
 │   │   ├── ScraperCircuitBreaker.kt # Circuit breaker pattern (CLOSED/OPEN/HALF_OPEN)
-│   │   ├── WebViewContentLoader.kt # Headless WebView fallback
+│   │   ├── WebViewContentLoader.kt # Headless WebView fallback + strict isAllowedDomain + mainHandler cleanup
 │   │   ├── auth/
 │   │   │   └── SourceAuthManager.kt # Quản lý session cookie, verify, probe NO_COOKIES
 │   │   └── cookie/
 │   │       ├── CookieStore.kt       # Interface quản lý cookie
-│   │       ├── AndroidCookieStore.kt # CookieManager wrapper an toàn
+│   │       ├── AndroidCookieStore.kt # CookieManager wrapper an toàn (injectable provider + removeCookies host/wildcard)
 │   │       └── WebViewCookieHandler.kt # Cookie sync & validation
 │   └── repository/
 │       ├── IStoryRepository.kt      # Interface — story/chapter core
-│       ├── StoryRepository.kt       # Core: search, browse, detail, chapters, refresh
+│       ├── StoryRepository.kt       # Core: search, browse, detail, chapters, refresh (atomic merge, upgradeToHttps + StoryEntity.toDomain)
 │       ├── ISourceAuthRepository.kt # Interface — xác thực nguồn truyện
 │       ├── SourceAuthRepository.kt  # Triển khai quản lý auth session, cookie
 │       ├── IDownloadRepository.kt   # Interface — download ops
@@ -102,18 +104,18 @@ app/src/main/
 │       ├── ReadingProgressRepository.kt   # Reading position, history
 │       ├── IPokemonRepository.kt          # Interface — tra cứu tên Pokémon trong đoạn văn
 │       ├── PokemonRepository.kt           # Lazy-load pokemon_pokedex.json + Mutex + Trie matcher trên Dispatchers.Default
-│       ├── DownloadProgress.kt      # (top-level data class in StoryRepository.kt)
-│       ├── ReadingStatsRepository.kt # Reading time, chapters read, streak
+│       ├── DownloadProgress.kt      # (top-level data class in StoryRepository.kt, processed = current + errors)
+│       ├── ReadingStatsRepository.kt # Reading time, chapters read, streak (associateBy date + isActiveDay)
 │       ├── SearchHistoryRepository.kt # Recent searches CRUD
-│       └── BackupRepository.kt    # Backup/restore: ZIP export/import via SAF
+│       └── BackupRepository.kt    # Backup/restore: streaming ZIP export & 2-phase import via SAF + Zip Bomb guard + withWriteTransaction
 ├── util/
 │   ├── TextReplacementHelper.kt # Thay chữ: 24 default regex + custom JSON
 │   ├── TextFormatHelper.kt      # Tự động format chương truyện (dấu câu, ngắt đoạn)
 │   ├── PokemonLookupHelper.kt   # Trie Longest-Match-First nhận diện tên Pokémon + từ điển Hán-Việt/đồng nhân
-│   └── CrashHandler.kt         # UncaughtExceptionHandler → local crash log files
+│   └── CrashHandler.kt         # UncaughtExceptionHandler (catch Throwable + finally defaultHandler) → local crash log files
 ├── tts/
-│   ├── TtsManager.kt            # Service proxy (dual-binding API cho UI)
-│   ├── TtsService.kt            # Media3 MediaSessionService + DefaultMediaNotificationProvider
+│   ├── TtsManager.kt            # Service proxy (on-demand startService + pendingPlay/pendingSeekAndPlayIndex queue)
+│   ├── TtsService.kt            # Media3 MediaSessionService + DefaultMediaNotificationProvider + pendingSpeed
 │   ├── TtsPlayer.kt             # Media3 SimpleBasePlayer (8 commands + timeline MediaItem)
 │   ├── TtsPlaybackStateMachine.kt # State machine thuần Kotlin (auto-advance 10s timer, PausedDuringAutoAdvance, suppressNextPlay)
 │   └── TtsTextPreprocessor.kt   # Xử lý text trước khi gửi TTS
@@ -121,41 +123,42 @@ app/src/main/
 │   └── DownloadService.kt       # Foreground Service cho tải truyện (dataSync, ID=3001, song song TTS)
 ├── ui/
 │   ├── navigation/
-│   │   └── AppNavigation.kt     # NavHost + Bottom Nav (animated, SourceLogin route)
+│   │   ├── AppNavigation.kt     # NavHost + Bottom Nav (animated, SourceLogin route, consumeWindowInsets)
+│   │   └── NavigationUtils.kt   # Mã hóa/giải mã URL & route params an toàn (Base64 URL-safe + sentinel "_" + tiền tố "b64_")
 │   ├── components/              # Shared UI components
-│   │   ├── ShimmerEffect.kt     # Skeleton loading animations
+│   │   ├── ShimmerEffect.kt     # Skeleton loading animations (MaterialTheme.colorScheme)
 │   │   ├── AnimatedEmptyState.kt # Animated empty state
 │   │   └── StoryCardPremium.kt  # Premium list & grid cards (badges WD, TTV, SST, TC, TF)
 │   ├── auth/                    # Đăng nhập nguồn truyện
-│   │   ├── SourceLoginScreen.kt # WebView login flow + navigation guard
+│   │   ├── SourceLoginScreen.kt # WebView login flow + strict host/scheme navigation guard
 │   │   ├── SourceLoginViewModel.kt # StateFlow + verify session
 │   │   └── PasteCookieDialog.kt # Fallback dán cookie express.sid
-│   ├── home/                    # Trang chủ (premium tabs)
-│   ├── explore/                 # Khám Phá (2-column grid, login banner)
+│   ├── home/                    # Trang chủ (premium tabs, dynamic 7-day chart, hasReadingHistory)
+│   ├── explore/                 # Khám Phá (Adaptive grid minSize=150.dp, login banner, chống lặp loadMore)
 │   │   ├── ExploreViewModel.kt  # Infinity scroll, pull-refresh, loginRequiredSources
 │   │   └── ExploreScreen.kt
-│   ├── search/                  # Tìm kiếm + bộ lọc thể loại (login banner)
-│   │   ├── SearchViewModel.kt   # loginRequiredSources StateFlow
+│   ├── search/                  # Tìm kiếm + bộ lọc thể loại/số chương/trạng thái (login banner, imePadding)
+│   │   ├── SearchViewModel.kt   # loginRequiredSources StateFlow, browseByFilterOnly, chống lặp loadMore
 │   │   └── SearchScreen.kt
 │   ├── detail/                  # Chi tiết truyện (hero header)
 │   │   └── DownloadNotificationHelper.kt # Tách notification logic ra khỏi VM
 │   ├── reader/                  # Đọc chương + TTS controls
-│   │   ├── ReaderScreen.kt      # Main reader composable (uses ReaderIntent MVI)
+│   │   ├── ReaderScreen.kt      # Main reader composable (uses ReaderIntent MVI, LocalActivity)
 │   │   ├── ReaderViewModel.kt   # MVI: ReaderIntent → onIntent() → state
 │   │   ├── ReaderPokemonSupport.kt # ReaderParagraphItem (AnnotatedString + drawBehind gạch chân nét đứt) & PokemonLookupDialog
 │   │   ├── TtsControlBar.kt     # TTS playback controls + speed/pitch
 │   │   ├── ReaderSettingsPanel.kt # Font, theme, brightness, thay chữ, từ điển Pokémon, tự cuộn
 │   │   ├── ChapterNavigation.kt # NextChapter + PrevChapter sections
-│   │   └── ChapterListPanel.kt  # Slide-in chapter list panel
-│   ├── downloads/               # Quản lý tải (stats card)
-│   ├── settings/                # Cài đặt (grouped cards, tài khoản nguồn truyện)
+│   │   └── ChapterListPanel.kt  # Slide-in chapter list panel (safeDrawingPadding + search filter)
+│   ├── downloads/               # Quản lý tải (stats card + errorMessage Snackbar)
+│   ├── settings/                # Cài đặt (grouped cards, tài khoản nguồn truyện, bảo vệ nguồn cuối cùng)
 │   │   ├── SettingsScreen.kt
-│   │   └── SettingsViewModel.kt # DataStore persistence, source auth status
-│   ├── splash/                  # Splash screen (loading)
+│   │   └── SettingsViewModel.kt # DataStore persistence, reactive getAuthState, intersect(ALL_SOURCES)
+│   ├── splash/                  # Splash screen (loading, delay 800ms)
 │   │   └── SplashScreen.kt      # Animated splash → navigate Home
 │   ├── stats/                   # Thống kê đọc
 │   │   ├── ReadingStatsViewModel.kt # Weekly data + streak + today
-│   │   └── ReadingStatsScreen.kt    # Bar chart + stat cards
+│   │   └── ReadingStatsScreen.kt    # Bar chart + stat cards ("Chuỗi ngày")
 │   └── theme/                   # Material 3 theme + Google Fonts
 │       ├── Color.kt             # Color tokens
 │       ├── Theme.kt             # AppTruyenTheme composable
@@ -190,7 +193,7 @@ docs/
 
 | Column | Type | Mô tả |
 |---|---|---|
-| id (PK) | TEXT | slug.numericId (truyencom) hoặc slug (tangthuvien) |
+| id (PK) | TEXT | `${sourceId}_$slug` (hoặc slug.numericId / slug trần cho dữ liệu cũ) |
 | slug | TEXT | URL slug |
 | title | TEXT | Tên truyện |
 | author | TEXT | Tác giả |
@@ -201,7 +204,7 @@ docs/
 | coverImageUrl | TEXT | URL ảnh bìa |
 | isInLibrary | BOOL | Đã thêm vào thư viện (**indexed**) |
 | addedTimestamp | LONG | Thời gian thêm (0 = chưa add, set bởi addToLibrary()) |
-| sourceId | TEXT | Nguồn truyện: "truyencom", "tangthuvien", "sstruyen", "truyenfull" (default: truyencom). Truyện cũ từ "metruyenchu" vẫn được giữ lại |
+| sourceId | TEXT | Nguồn truyện: "tangthuvien", "sstruyen", "wikidich" (tương thích dữ liệu offline cũ từ "truyencom", "truyenfull", "metruyenchu") |
 | status | TEXT | Trạng thái: "Hoàn thành", "Đang ra", etc. |
 | storyReplacementsEnabled | BOOL | Bật/tắt thay chữ riêng cho truyện (default: false) |
 | storyCustomReplacements | TEXT | Danh sách thay chữ riêng, JSON format giống global (default: "") |
@@ -239,7 +242,7 @@ docs/
 ## Luồng dữ liệu
 
 1. **Tìm kiếm**: User → SearchVM → Repository → ∀ sources parallel → merge → List<Story>
-1b. **Lọc theo thể loại**: User → SearchVM → Repository → ∀ sources.getStoriesByGenre(slug, page, 0, completedOnly) → mỗi source xử lý server-side filter riêng (TC: /full/, TTV: fns=ht, SST: ?loc=hoan-thanh, TF: /hoan/) → merge → List<Story>
+1b. **Lọc theo thể loại**: User → SearchVM → Repository → ∀ sources.getStoriesByGenre(slug, page, 0, completedOnly) → mỗi source xử lý server-side filter riêng (TTV: status=COMPLETED, SST: status=completed, WD: status=5794f03dd7ced228f4419191) → merge → List<Story>
 2. **Chi tiết**: User → DetailVM → Repository → Room cache → miss → sourceFor(url) → Web + Cache Room
 3. **Đọc online**: ReaderVM → Repository → check Room cache → miss → sourceFor(url) → Web
 4. **Đọc offline**: ReaderVM → Repository → check Room cache → hit → return cached content
@@ -249,18 +252,18 @@ docs/
 8. **TTS ngầm**: TtsService + WakeLock + MediaSession → tai nghe controls + notification
 9. **TTS auto-advance**: TtsService đọc xong → ReaderVM detect → auto load chương tiếp + play
 10. **Settings**: SettingsVM ↔ DataStore ← ReaderVM đọc khi khởi tạo (tốc độ, cỡ chữ, giao diện)
-11. **Auto-navigate**: ReaderScreen detect scroll cuối → ReaderVM.loadNextChapterOnScroll() → load chapter + LazyListState reset (remember key=chapterNumber)
+11. **Auto-navigate & Scroll Restoration**: ReaderScreen `LaunchedEffect(currentChapterNumber, isLoading)` khôi phục `listState.scrollToItem(initialScrollIndex)` từ `ReadingProgress.scrollPosition` (nếu mở lại đúng chương đang đọc dở) trước khi lắng nghe `snapshotFlow { firstVisibleItemIndex }` (debounce 1s) lưu vị trí cuộn qua `ReaderIntent.SaveScrollPosition`; cuộn hết chương → `ReaderVM.loadNextChapterOnScroll()`
 12. **Double-swipe**: NestedScrollConnection.onPostScroll → đếm overscroll (80dp/swipe) → 2 swipes → loadNext/PrevChapterOnScroll()
 13. **Prev chapter scroll-to-end**: loadPrevChapterOnScroll() set scrollToEnd=true → ReaderScreen cuộn đến cuối chương trước
-14. **Toggle bars**: Tap paragraph → toggleBarsVisibility() → AnimatedVisibility slide bars in/out, animated content padding
-15. **Reading Stats**: ReaderVM.onCleared() → recordReadingSession(durationMs) → ReadingStatsDao.upsertStats()
-16. **TTS Pitch/Voice**: SettingsVM → DataStore persist → ReaderVM loadDefaultSettings → TtsManager.setPitch/setVoice
-20. **Auto-scroll**: ReaderSettingsPanel toggle → ReaderIntent.ToggleAutoScroll → LaunchedEffect loop animateScrollBy(speed*1.2f, 50ms) → pause on touch
+14. **Toggle bars & Brightness**: Tap paragraph → toggleBarsVisibility() → AnimatedVisibility slide overlay bars in/out (cố định `contentPadding` `64.dp`/`140.dp` chống nhảy chữ); độ sáng màn hình (`rememberSaveable` + `DisposableEffect`) quản lý ở cấp gốc `ReaderScreen`
+15. **Reading Stats**: `LifecycleEventObserver` (`ON_RESUME`/`ON_PAUSE`) trên `ReaderScreen` + `ReaderVM.onCleared()` → `flushReadingSession()` ghi `recordReadingSession(durationMs)` (loại trừ thời gian tắt màn hình/background) và `recordChapterReadOnTransition()` trên cả 6 luồng chuyển chương
+16. **TTS Pitch/Voice**: SettingsVM → DataStore persist → ReaderVM loadDefaultSettings (`CompletableDeferred` đồng bộ trước `loadChapter` đầu tiên) → TtsManager.setPitch/setVoice
+20. **Auto-scroll**: ReaderSettingsPanel toggle → ReaderIntent.ToggleAutoScroll → LaunchedEffect loop animateScrollBy(speed*1.2f, 50ms) → tự động tắt khi chạm đáy chương (`!listState.canScrollForward`) hoặc pause on touch
 21. **Backup/Restore**: SettingsScreen SAF → SettingsVM → BackupRepository.exportBackup(ZIP) / importBackup(ZIP) → metadata.json + chapters/{storyId}/{num}.txt
 17. **Cancel Download**: UI cancel button → DetailVM.cancelDownload() → Job.cancel() → ensureActive() in repository
-18. **Per-story Text Replacement**: StoryDetailScreen ⚙️ → DetailVM → Repository → StoryDao → Room DB (storyReplacementsEnabled + storyCustomReplacements JSON) → ReaderVM load khi init → TextReplacementHelper.applyAllReplacements(global trước, per-story sau)
-19. **Gửi sang tổng**: StorySettingsBottomSheet 🌐 → DetailVM → Repository.sendReplacementToGlobal() → DataStore (global custom replacements)
-22. **Từ điển Pokémon khi đọc truyện**: ReaderVM.recomputeDisplayedParagraphs() → PokemonRepository.findMatchesInParagraphs() (lazy-load `assets/pokemon_pokedex.json` + Trie Longest-Match-First trên `Dispatchers.Default`, không đụng chuỗi gốc gửi sang TTS) → `paragraphPokemonMatches` → `ReaderParagraphItem` (render `AnnotatedString` + gạch chân nét đứt `drawBehind`) → chạm vào span tên Pokémon gửi `ReaderIntent.SelectPokemon` → mở `PokemonLookupDialog` (ảnh chính thức qua Coil 3, huy hiệu 18 hệ tiếng Việt, chuyển đổi hình thái & ngôn ngữ Hán-Việt / Việt / Trung / Anh)
+18. **Per-story Text Replacement & Raw Cache**: StoryDetailScreen / ReaderSettingsPanel → DetailVM / ReaderVM → StoryDao → Room DB (`storyReplacementsEnabled` + `storyCustomReplacements` JSON) → `ReaderVM` giữ `contentCache` văn bản thô và chạy `processRawChapterContent` (`TextFormatHelper.formatChapter` + `TextReplacementHelper.applyAllReplacements` + `splitIntoParagraphs`) trên `Dispatchers.Default`; bật/tắt format hoặc thay chữ gọi `reprocessCurrentChapter()` tức thì mà không tải lại mạng
+19. **Gửi sang tổng**: ReaderSettingsPanel 🌐 → `ReaderVM.sendReplacementToGlobal()` → DataStore (global custom replacements) + cập nhật `customReplacements` trong bộ nhớ + `reprocessCurrentChapter()` + `Snackbar` tiếng Việt
+22. **Từ điển Pokémon khi đọc truyện**: `ReaderVM.refreshPokemonMatches(paragraphs, enabled)` → `PokemonRepository.findMatchesInParagraphs()` (lazy-load `assets/pokemon_pokedex.json` + Trie Longest-Match-First trên `Dispatchers.Default`, không đụng chuỗi gốc gửi sang TTS) → `paragraphPokemonMatches` → `ReaderParagraphItem` (render `AnnotatedString` + gạch chân nét đứt `drawBehind`) → chạm vào span tên Pokémon gửi `ReaderIntent.SelectPokemon` → mở `PokemonLookupDialog` (cuộn dọc `verticalScroll`, ảnh chính thức qua Coil 3, huy hiệu 18 hệ tiếng Việt, chuyển đổi hình thái & ngôn ngữ Hán-Việt / Việt / Trung / Anh)
 
 ## Dependencies chính
 

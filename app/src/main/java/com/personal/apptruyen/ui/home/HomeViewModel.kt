@@ -1,8 +1,8 @@
 package com.personal.apptruyen.ui.home
 
-import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.personal.apptruyen.data.local.entity.ReadingStatsEntity
 import com.personal.apptruyen.data.model.ReadingProgress
 import com.personal.apptruyen.data.model.Story
 import com.personal.apptruyen.data.repository.IReadingProgressRepository
@@ -12,8 +12,10 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.collections.immutable.ImmutableList
 import kotlinx.collections.immutable.persistentListOf
 import kotlinx.collections.immutable.toImmutableList
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
+import timber.log.Timber
 import java.text.SimpleDateFormat
 import java.util.Calendar
 import java.util.Locale
@@ -36,13 +38,33 @@ class HomeViewModel
         private val readingStatsRepository: ReadingStatsRepository,
     ) : ViewModel() {
 
+        data class DayChapterStat(
+            val label: String,
+            val chapters: Int,
+            val isToday: Boolean = false,
+        )
+
         /** Reading stats state for the stats tab */
         data class ReadingStatsState(
             val todayChapters: Int = 0,
             val todayMinutes: Int = 0,
             val currentStreak: Int = 0,
-            val weeklyChapters: ImmutableList<Int> = persistentListOf(), // 7 days, Mon→Sun
+            val weeklyChapters: ImmutableList<Int> = persistentListOf(),
+            val weeklyStats: ImmutableList<DayChapterStat> = persistentListOf(),
         )
+
+        internal var calendarProvider: () -> Calendar = defaultCalendarProvider
+        private var statsObserverJob: kotlinx.coroutines.Job? = null
+
+        internal constructor(
+            storyRepository: IStoryRepository,
+            readingProgressRepository: IReadingProgressRepository,
+            readingStatsRepository: ReadingStatsRepository,
+            calendarProvider: () -> Calendar,
+        ) : this(storyRepository, readingProgressRepository, readingStatsRepository) {
+            this.calendarProvider = calendarProvider
+            observeReadingStats()
+        }
 
         /** Reading progress map: storyId → ReadingProgress */
         val progressMap: StateFlow<Map<String, ReadingProgress>> =
@@ -65,6 +87,11 @@ class HomeViewModel
                 .getRecentlyReadStories()
                 .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
+        val hasReadingHistory: StateFlow<Boolean> =
+            rawRecentlyRead
+                .map { it.isNotEmpty() }
+                .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), false)
+
         /** Sorted recently read stories based on selected sort option */
         val recentlyRead: StateFlow<List<Story>> =
             combine(
@@ -86,7 +113,7 @@ class HomeViewModel
             }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
         init {
-            loadReadingStats()
+            observeReadingStats()
         }
 
         fun setSortOption(option: HomeSortOption) {
@@ -99,10 +126,11 @@ class HomeViewModel
                 try {
                     storyRepository.refreshLibraryStories()
                 } catch (e: Exception) {
-                    Log.d("HomeVM", "Refresh library failed", e)
+                    if (e is CancellationException) throw e
+                    Timber.d(e, "Refresh library failed")
                 }
                 _isRefreshing.value = false
-                loadReadingStats()
+                refreshReadingStats()
             }
         }
 
@@ -115,46 +143,84 @@ class HomeViewModel
                 try {
                     readingProgressRepository.deleteReadingProgress(storyId)
                 } catch (e: Exception) {
-                    Log.d("HomeVM", "Remove from reading list failed", e)
+                    if (e is CancellationException) throw e
+                    Timber.d(e, "Remove from reading list failed")
                 }
             }
         }
 
-        private fun loadReadingStats() {
+        private fun observeReadingStats() {
+            statsObserverJob?.cancel()
+            statsObserverJob =
+                viewModelScope.launch {
+                    readingStatsRepository
+                        .observeAllStats()
+                        .catch { e -> Timber.w(e, "Failed to observe reading stats") }
+                        .collect { allStats ->
+                            recalculateReadingStats(allStats)
+                        }
+                }
+        }
+
+        fun refreshReadingStats() {
             viewModelScope.launch {
                 try {
-                    val sdf = SimpleDateFormat("yyyy-MM-dd", Locale.US)
-
-                    // Today's stats
-                    val todayKey = sdf.format(java.util.Date())
                     val recentStats = readingStatsRepository.getRecentStats(30)
-                    val todayStat = recentStats.firstOrNull { it.date == todayKey }
-
-                    // Streak
-                    val streak = readingStatsRepository.getReadingStreak()
-
-                    // Weekly chapters (last 7 days, Mon→today)
-                    val cal = Calendar.getInstance()
-                    val weeklyChapters = mutableListOf<Int>()
-                    // Go back 6 days from today
-                    for (i in 6 downTo 0) {
-                        val tempCal = Calendar.getInstance()
-                        tempCal.add(Calendar.DAY_OF_YEAR, -i)
-                        val dayKey = sdf.format(tempCal.time)
-                        val dayStat = recentStats.firstOrNull { it.date == dayKey }
-                        weeklyChapters.add(dayStat?.chaptersRead ?: 0)
-                    }
-
-                    _readingStats.value =
-                        ReadingStatsState(
-                            todayChapters = todayStat?.chaptersRead ?: 0,
-                            todayMinutes = ((todayStat?.totalReadingTimeMs ?: 0) / 60_000).toInt(),
-                            currentStreak = streak,
-                            weeklyChapters = weeklyChapters.toImmutableList(),
-                        )
+                    recalculateReadingStats(recentStats)
+                } catch (e: CancellationException) {
+                    throw e
                 } catch (e: Exception) {
-                    Log.d("HomeVM", "Load reading stats failed", e)
+                    Timber.w(e, "Refresh reading stats failed")
                 }
             }
+        }
+
+        private suspend fun recalculateReadingStats(allStats: List<ReadingStatsEntity>) {
+            try {
+                val streak = readingStatsRepository.getReadingStreak()
+                val statsByDate = allStats.associateBy { it.date }
+                val sdf = SimpleDateFormat("yyyy-MM-dd", Locale.US)
+                val baseCal = calendarProvider()
+                val todayStr = sdf.format(baseCal.time)
+                val todayStat = statsByDate[todayStr]
+                val todayMinutes = ((todayStat?.totalReadingTimeMs ?: 0L) / 60_000).toInt()
+                val todayChapters = todayStat?.chaptersRead ?: 0
+
+                val weeklyChaptersList = mutableListOf<Int>()
+                val weeklyStatsList = mutableListOf<DayChapterStat>()
+                for (i in 6 downTo 0) {
+                    val tempCal = (baseCal.clone() as Calendar).apply { add(Calendar.DAY_OF_YEAR, -i) }
+                    val dateStr = sdf.format(tempCal.time)
+                    val chapters = statsByDate[dateStr]?.chaptersRead ?: 0
+                    val dayOfWeek = tempCal.get(Calendar.DAY_OF_WEEK) // 1 (CN) .. 7 (T7)
+                    val label = DAY_LABELS.getOrElse(dayOfWeek - 1) { "" }
+                    weeklyChaptersList.add(chapters)
+                    weeklyStatsList.add(
+                        DayChapterStat(
+                            label = label,
+                            chapters = chapters,
+                            isToday = (i == 0),
+                        ),
+                    )
+                }
+
+                _readingStats.value =
+                    ReadingStatsState(
+                        todayChapters = todayChapters,
+                        todayMinutes = todayMinutes,
+                        currentStreak = streak,
+                        weeklyChapters = weeklyChaptersList.toImmutableList(),
+                        weeklyStats = weeklyStatsList.toImmutableList(),
+                    )
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Timber.w(e, "Failed to recalculate reading stats")
+            }
+        }
+
+        companion object {
+            private val DAY_LABELS = listOf("CN", "T2", "T3", "T4", "T5", "T6", "T7")
+            internal var defaultCalendarProvider: () -> Calendar = { Calendar.getInstance() }
         }
     }

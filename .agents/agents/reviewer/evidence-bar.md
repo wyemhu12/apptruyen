@@ -9,7 +9,7 @@
 Evidence hợp lệ CHỈ gồm 4 loại (ghi rõ loại trong ma trận):
 
 - **`[CMD]`**: lệnh đã chạy (nằm trong ALLOWLIST), kèm exit code và trích đoạn output liên quan.
-- **`[SRC]`**: `file:line` trong source dự án (`app/src/...`), `docs/`, hoặc mã nguồn thư viện đã đọc, kèm tóm tắt hành vi đọc được.
+- **`[SRC]`**: `file:line` trong source dự án (`app/src/...`, `app/schemas/...`), file cấu hình/script gốc (`app/build.gradle.kts`, `.editorconfig`, `AndroidManifest.xml`, `.agents/scripts/*.js`) hoặc mã nguồn thư viện đã đọc bằng `view_file`, kèm tóm tắt hành vi đọc được. Không chấp nhận trích dẫn `docs/plans/` làm `[SRC]`.
 - **`[ADV]`**: kịch bản đối kháng dạng timeline (xem 4.5.2) đã lần theo đến kết cục cụ thể.
 - **`[URL]`**: tài liệu chính thức, release notes hoặc advisory năm 2026 (developer.android.com, kotlinlang.org, square.github.io/okhttp, jsoup.org...). Chỉ đủ cho version và API surface, KHÔNG đủ cho hành vi runtime tinh vi.
 

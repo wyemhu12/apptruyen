@@ -134,6 +134,20 @@
   2. Trong `AppModule.kt`: Bọc `db.withWriteTransaction { block() }` bên trong `DatabaseTransactionRunner`.
 - **Quy tắc phòng ngừa**: Khi nâng cấp thư viện major version (như Room 3 KMP), luôn chạy cổng biên dịch `compileDebugKotlin` độc lập ngay sau phase DB để xác minh chữ ký bytecode thực tế trước khi viết tiếp các tầng khác.
 
+### 2026-10-15: Lệch chuẩn `Story.id` giữa các Scraper và `StoryRepository` làm hỏng cache Offline của Wikidich và gây ghi đè dữ liệu khi trùng `slug`
+
+- **Triệu chứng**:
+  1. Truyện tải từ nguồn Wikidich không thể mở trang chi tiết (`StoryDetailScreen`) khi mất kết nối mạng dù đã tải đầy đủ chương vào Room DB.
+  2. Khi mở cùng một bộ truyện có chung `slug` (ví dụ `pham-nhan-tu-tien`) ở cả Tàng Thư Viện và SsTruyện, bản ghi ở nguồn mở sau sẽ `@Upsert` ghi đè `sourceId`, `url` của truyện trong bảng `stories` và ghi đè toàn bộ URL chương của nguồn trước trong bảng `chapters`.
+- **Nguyên nhân gốc**:
+  1. `WikidichScraper` đặt `Story.id = "${sourceId}_$slug"` (`"wikidich_..."`), trong khi `TangThuVienScraper` và `SsTruyenScraper` đặt `Story.id = slug` trần (không có tiền tố nguồn), còn `StoryRepository.getStoryDetail(storyUrl)` chỉ dùng `extractStoryId(storyUrl)` cắt chuỗi sau dấu `/` cuối cùng để gọi `storyDao.getStoryById(storyId)`. Do đó với mọi truyện Wikidich, `storyDao.getStoryById(rawSlug)` luôn trả về `null`.
+  2. Vì `stories.id` là khóa chính duy nhất của bảng `stories` và khóa ngoại `storyId` của bảng `chapters`/`reading_progress`, việc dùng `slug` trần không kèm `sourceId` khiến hai nguồn khác nhau có chung `slug` va chạm khóa chính trực tiếp.
+- **Cách sửa**:
+  1. Chuẩn hóa `Story.id` và `Chapter.storyId` thành `"${sourceId}_$slug"` đồng nhất trên cả `TangThuVienScraper`, `SsTruyenScraper` và `WikidichScraper`.
+  2. Thêm `storyDao.getStoryByUrl(url)` và hàm `StoryRepository.findCachedStory(storyUrl)` tra cứu theo thứ tự: (a) khớp chính xác theo `url`, (b) khớp theo ID chuẩn `"${matchedSource.sourceId}_$rawSlug"`, và (c) fallback sang ID legacy `rawSlug` **chỉ khi** `legacyCached.sourceId == matchedSource.sourceId` (hoặc khi nguồn cũ đã gỡ như `truyencom`/`truyenfull`).
+  3. Bảo toàn khóa chính `id = cached.id` / `existing.id` khi cập nhật metadata trong `StoryRepository.getStoryDetail`, `StoryRepository.refreshLibraryStories`, `StoryRepository.mergeAndInsertChapters` và `DownloadRepository.snapshotStoryMetadata` để không làm mất liên kết chương đã tải của dữ liệu cũ.
+- **Quy tắc phòng ngừa**: Trong kiến trúc gộp nhiều nguồn truyện (multi-source aggregator), khóa chính của thực thể (`Story.id`, `Chapter.storyId`) bắt buộc phải mang tiền tố định danh nguồn (`"${sourceId}_$slug"`), và mọi truy vấn đọc cache từ URL phải đối chiếu `sourceId` hoặc `url` thay vì chỉ cắt `slug` từ đường dẫn.
+
 ## TTS / MediaSession
 
 ### 2026-10-14: Phân biệt trạng thái Pause lúc đang tải chương kế tiếp (`PausedDuringAutoAdvance`) với Pause khi chuyển chương thủ công
@@ -157,11 +171,107 @@
 - **Cách sửa**: Gỡ bỏ quy tắc chèn `\n` trước dấu gạch nối `[\-–—]` trong `TextFormatHelper.kt` (các đoạn thoại bắt đầu bằng gạch đầu dòng từ HTML vốn đã nằm ở đoạn riêng và vẫn được bảo toàn ở bước kiểm tra đầu đoạn), đồng thời bổ sung `TextFormatHelperTest.kt`.
 - **Quy tắc phòng ngừa**: Khi xử lý định dạng văn bản tự động bằng regex, không bao giờ dùng lượng từ `\s*` (0 hoặc nhiều khoảng trắng) để nhận diện dấu gạch đầu dòng; mọi thay đổi trên `TextFormatHelper` phải có unit test kiểm tra tên riêng có dấu gạch nối (`Spider-Man`, `Ho-Oh`) và từ viết tắt (`S.H.I.E.L.D`).
 
+### 2026-10-19: Đặt `DisposableEffect` độ sáng bên trong `AnimatedVisibility`, mất `scrollPosition` do thứ tự `snapshotFlow`, và bẫy `(?<!\p{N})` bên trong lookahead `(?=...)` của `TextFormatHelper`
+
+- **Triệu chứng**:
+  1. Kéo thanh chỉnh độ sáng trong `ReaderSettingsPanel` rồi đóng bảng cài đặt làm màn hình lập tức quay về độ sáng hệ thống (`-1f`).
+  2. Mở lại chương đang đọc dở luôn bị cuộn về đầu chương (`scrollPosition = 0`), và khi thoát màn hình đọc, `onCleared()` ghi đè `scrollPosition = 0` làm mất tiến độ cuộn vừa lưu.
+  3. Khi mở chương đầu tiên, đôi khi quy tắc thay chữ tùy chỉnh hoặc `prefetchCount` chưa kịp áp dụng; chuyển chương liên tiếp nhanh gây nhảy ngược về chương cũ.
+  4. Trong `TextFormatHelper`, biểu thức `\\.(?=\\p{L}|(?<!\\p{N})\\p{N})` vẫn chèn khoảng trắng vào giữa `3.14` (`3. 14`) và `12:30` (`12: 30`).
+- **Nguyên nhân gốc**:
+  1. State `brightness` và `DisposableEffect(Unit) { onDispose { lp.screenBrightness = -1f } }` được khai báo bên trong khối `AnimatedVisibility(visible = state.showSettings)`. Ngay khi đóng bảng cài đặt (`showSettings = false`), Composable con rời khỏi Composition tree và kích hoạt `onDispose`, xóa sạch độ sáng tùy chỉnh.
+  2. `ReaderViewModel.loadChapter` và `onCleared()` luôn ghi cứng `scrollPosition = 0`, còn trên `ReaderScreen`, `snapshotFlow { listState.firstVisibleItemIndex }` chạy độc lập với việc khôi phục vị trí cuộn.
+  3. Trong `ReaderViewModel.init`, `loadDefaultSettings()` và `loadChapter()` chạy trên 2 coroutine song song không đồng bộ hóa, và `loadChapter()` không hủy `Job` của lượt tải chương trước đó.
+  4. Khi dùng negative lookbehind `(?<!\p{N})\p{N}` **bên trong** positive lookahead `(?=...)` đứng sau dấu `.` (hoặc `,`, `:`), con trỏ regex tại thời điểm kiểm tra lookbehind đang đứng ngay sau dấu `.`, nên ký tự liền trước nó chính là dấu `.` (không phải chữ số `\p{N}`), khiến `(?<!\p{N})` luôn đúng!
+- **Cách sửa**:
+  1. Đưa `brightness` (`rememberSaveable`), `LaunchedEffect` và `DisposableEffect` khôi phục `screenBrightness = -1f` ra cấp gốc của `ReaderScreen`.
+  2. Duy trì `currentScrollPosition` và `initialScrollIndex` trong `ReaderViewModel`, khôi phục từ `ReadingProgress` khi cùng chương, và gộp `listState.scrollToItem(initialScrollIndex)` chạy đồng bộ trước `snapshotFlow` trong cùng một `LaunchedEffect(state.currentChapterNumber, state.isLoading)`.
+  3. Dùng `CompletableDeferred<Unit>` (`settingsLoadedDeferred`) trong `try/finally` của `loadDefaultSettings()` để `loadChapter()` đợi cài đặt nạp xong, hủy `loadChapterJob?.cancel()` khi chuyển chương, và giữ `contentCache` thô để `reprocessCurrentChapter()` chạy trên `Dispatchers.Default`.
+  4. Trong `TextFormatHelper`, sửa lookbehind bên trong lookahead thành `(?<!\\p{N}[,:])\\p{N}` và `(?<!\\p{N}\\.)\\p{N}` (kiểm tra lùi 2 ký tự bao gồm cả dấu câu), kết hợp mask `URL_OR_DOMAIN_REGEX`.
+- **Quy tắc phòng ngừa**:
+  1. Không bao giờ đặt `DisposableEffect` quản lý tài nguyên cấp Activity/Window (như độ sáng màn hình, giữ sáng màn hình, hướng màn hình) bên trong một panel/dialog con có vòng đời ẩn/hiện (`AnimatedVisibility`); phải đặt ở Composable gốc của Screen.
+  2. Khi viết lookbehind `(?<!...)` nằm bên trong lookahead `(?=...)` sau một ký tự K, biểu thức lookbehind phải tính cả ký tự K (`(?<!\p{N}K)`), vì vị trí neo của lookahead nằm ở phía sau K.
+
+### 2026-10-19: Vòng lặp `loadMore()` vô tận khi trùng kết quả, lỗi `KotlinNothingValueException` khi collect `StateFlow` mock, và bẫy kiểm tra tên miền `endsWith` không có dấu chấm
+
+- **Triệu chứng**:
+  1. Trên `ExploreScreen` và `SearchScreen`, khi cuộn đến trang cuối cùng mà nguồn trả về danh sách trùng với trang trước hoặc bị lỗi mạng, `LaunchedEffect(shouldLoadMore)` kích hoạt `loadMore()` liên tục trong vòng lặp vô hạn.
+  2. Trên `HomeScreen`, biểu đồ 7 ngày gán nhãn tĩnh `T2..CN` khiến cột hôm nay luôn bị gắn nhãn `CN` (sai thứ ở 6/7 ngày); chọn bộ lọc `"Chưa xong"` khi đã đọc hết các truyện làm biến mất cả hàng `FilterChip`.
+  3. Trên `SettingsScreen`, biểu thức `enabled = isEnabled || state.enabledSources.size < ALL_SOURCES.size` luôn bằng `true` khi công tắc đang bật (`isEnabled == true`), cho phép tắt nốt nguồn cuối cùng.
+  4. Kiểm tra tên miền WebView bằng `host.endsWith(domain)` hoặc `host.contains(domain)` cho phép tên miền giả mạo kiểu `evilwikicv.org` vượt qua bộ lọc.
+  5. Trong Unit Test, khi ViewModel gọi `authRepository.getAuthState(id).collect { ... }` trên một mock `mockk(relaxed = true)` chưa stub `getAuthState`, MockK ném `kotlin.KotlinNothingValueException`.
+- **Nguyên nhân gốc**:
+  1. `canLoadMore` chỉ kiểm tra `results.isNotEmpty()` của trang vừa tải mà không kiểm tra `merged.size > currentStories.size` sau khi loại trùng (`deduplicateStories`), và không đặt `canLoadMore = false` trong khối `catch`.
+  2. `HomeScreen` dùng danh sách nhãn thứ cố định thay vì tính động từ `Calendar.DAY_OF_WEEK` của từng ngày trong cửa sổ 7 ngày trượt, và gộp điều kiện hiển thị `FilterChip` chung với `recentlyRead.isNotEmpty()`.
+  3. Biểu thức De Morgan cho công tắc nguồn bị viết ngược (`isEnabled || ...` thay vì `!isEnabled || state.enabledSources.size > 1`).
+  4. `String.endsWith("wikicv.org")` khớp với mọi chuỗi kết thúc bằng `"wikicv.org"` bất kể ký tự đứng trước có phải là dấu chấm phân tách subdomain hay không.
+  5. Phương thức `StateFlow.collect(...)` trong `kotlinx.coroutines.flow` có kiểu trả về là `Nothing`. Khi gọi `.collect` trên một đối tượng `StateFlow` do MockK tạo tự động (`relaxed = true`), MockK cố gắng tạo giá trị trả về cho kiểu `Nothing` và ném `KotlinNothingValueException`.
+- **Cách sửa**:
+  1. Chỉ giữ `canLoadMore = results.isNotEmpty() && merged.size > currentStories.size` và đặt `canLoadMore = false` khi `loadMore` gặp lỗi.
+  2. Tính `DayChapterStat(label, chapters, isToday)` động trong `HomeViewModel` và tách `hasReadingHistory: StateFlow<Boolean>` khỏi `recentlyRead`.
+  3. Sửa điều kiện `Switch` thành `enabled = !isEnabled || state.enabledSources.size > 1` và chuẩn hóa `.intersect(ALL_SOURCES).ifEmpty { ALL_SOURCES }`.
+  4. Dùng `WebViewContentLoader.isAllowedDomain(host, allowedDomains)` kiểm tra `normalizedHost == domain || normalizedHost.endsWith(".$domain")`, đồng thời dọn dẹp `WebView` trong khối `finally` của `withTimeoutOrNull`.
+  5. Trong `@BeforeEach` của unit test có mock interface trả về `StateFlow`/`SharedFlow`, luôn stub rõ `every { mock.getStateFlow(...) } returns MutableStateFlow(...)`.
+- **Quy tắc phòng ngừa**:
+  1. Mọi logic phân trang vô tận (`canLoadMore`) bắt buộc phải kiểm tra số lượng phần tử thực sự tăng lên sau khi gộp/loại trùng (`merged.size > previous.size`), không chỉ kiểm tra trang mạng trả về khác rỗng.
+  2. Kiểm tra tên miền (host allowlist) bắt buộc phải so khớp `host == domain || host.endsWith(".$domain")`, tuyệt đối không dùng `contains()` hay `endsWith(domain)` thiếu dấu chấm.
+  3. Không bao giờ để MockK tự sinh `relaxed` mock cho kiểu trả về `StateFlow`/`SharedFlow` nếu code sản phẩm gọi `.collect` trực tiếp trên đó; luôn stub trả về `MutableStateFlow` thật.
 
 ## Coroutines / Lifecycle
 
-_Chưa có entry._
+### 2026-10-16: Khắc phục 6 nhóm lỗi Critical/High về Sao lưu Streaming, Room `ON DELETE CASCADE`, Chiếu nhẹ `CursorWindow`, `DownloadService` Token/Timeout, TTS `onDone` Race và `CancellationException`
+
+- **Triệu chứng**:
+  1. Xuất/nhập bản sao lưu thư viện lớn có nguy cơ `OutOfMemoryError`; khôi phục bản sao lưu làm sập `ReaderViewModel` / `SettingsViewModel` với `ClassCastException: java.lang.Float cannot be cast to java.lang.Integer` tại khóa `auto_scroll_speed`, đồng thời làm mất các chương đã tải trên máy nếu bản sao lưu cũ hơn.
+  2. Chuỗi ngày đọc liên tiếp (`getReadingStreak`) trả về `0` vào buổi sáng khi hôm nay chưa đọc dù hôm qua vẫn đọc liên tục.
+  3. Mở truyện có hàng nghìn chương đã tải gây giật lag hoặc lỗi `CursorWindow` 2 MB; tải lại danh sách chương thực hiện hàng nghìn lệnh `UPDATE` đơn lẻ.
+  4. Hủy tải rồi bấm tải truyện mới ngay lập tức trên `DownloadService` làm lượt tải mới tự tắt; chạy nền quá hạn `dataSync` trên Android 15/16 có nguy cơ crash `ForegroundServiceDidNotStopInTimeException`.
+  5. Bấm Pause hoặc chuyển đoạn trên `TtsService` đôi khi vẫn tự nhảy sang đoạn kế tiếp do callback `onDone` của câu vừa bị `tts.stop()` gửi trễ.
+  6. Hủy coroutine khi chuyển màn hình bị `Exception.toScraperException()` và `ScraperCircuitBreaker.execute()` bắt nhầm, làm tăng bộ đếm lỗi của Circuit Breaker và hiện thông báo lỗi giả.
+- **Nguyên nhân gốc**:
+  1. `BackupRepository` tích trữ toàn bộ nội dung chương vào `contentMap` trong RAM; `importBackup` đoán kiểu cài đặt bằng `key.contains("speed")` (gán `Float` cho `AUTO_SCROLL_SPEED` vốn là `Int`) và dùng `storyDao.insertStories` (`OnConflictStrategy.REPLACE` / `@Upsert`) kích hoạt `FOREIGN KEY ... ON DELETE CASCADE` xóa sạch các dòng `chapters` và `reading_progress` hiện có trên máy trước khi chèn lại.
+  2. `ReadingStatsRepository.getReadingStreak()` dùng chỉ số vòng lặp `i` của danh sách `recent` làm số ngày lùi của `Calendar` sau khi `continue` bỏ qua ngày hôm nay.
+  3. `ChapterDao.getChaptersByStory` / `getChaptersByStoryOnce` dùng `SELECT * FROM chapters`, kéo toàn bộ cột `content` dài hàng chục MB vào bộ nhớ mỗi khi Room phát Flow.
+  4. Khối `finally` của `downloadJob` cũ trong `DownloadService` gọi `stopSelfCleanly()` vô điều kiện mà không đối chiếu token của lượt tải đang hoạt động.
+  5. `UtteranceProgressListener.onDone(utteranceId)` không đối chiếu `utteranceId == "paragraph_$currentIndex"` và `_state.value.isPlaying`.
+  6. `Exception.toScraperException()` và các khối `catch (e: Exception)` bắt cả `CancellationException` (subclass của `IllegalStateException`).
+- **Cách sửa**:
+  1. Chuyển `BackupRepository` sang streaming ZIP (`CountingNonClosingOutputStream`, `BoundedNonClosingInputStream`, spool `tempZipFile`, Pha 1 kiểm chứng ngoài DB transaction, Pha 2a dùng `insertStoryIgnore` + `updateStory` trong `withWriteTransaction`, Pha 2b ghi chương theo lô `<= 50` chương & `<= 8 MB` qua `restoreChapterContentIfEmpty`); khôi phục cài đặt theo bảng khóa tường minh `SettingsKeys.restoreSettingFromBackup` kèm `healCorruptedIntPreferences()` và `getIntSafe()`.
+  2. Tính `getReadingStreak()` bằng `recent.associateBy { it.date }` và `isActiveDay()` (`totalReadingTimeMs > 0L || chaptersRead > 0`), đồng thời giữ overload không tham số `getReadingStreak()` để tương thích với MockK.
+  3. Dùng chiếu nhẹ `NULL AS content` cho cả 5 truy vấn danh sách chương trong `ChapterDao`; bọc `mergeAndInsertChapters` trong `withWriteTransaction` và chỉ gọi `updateChapterMetadata` khi có thay đổi.
+  4. Quản lý `activeDownloadToken` và `lastStartId` trong `DownloadService`, dùng `stopSelfResult(stopId)` khi kết thúc bình thường và `stopSelf()` trong `onTimeout` / lỗi `startForeground`.
+  5. Thêm `TtsPlaybackStateMachine.shouldProcessUtteranceDone`, giải phóng tài nguyên trong `onError`, và ủy quyền `nextParagraph`/`prevParagraph` sang `seekAndPlay`.
+  6. Rethrow `if (e is CancellationException) throw e` ở đầu `toScraperException()`, `ScraperCircuitBreaker.execute()`, các Scraper, Repository và ViewModel.
+- **Quy tắc phòng ngừa**:
+  1. Không bao giờ dùng `SELECT *` cho các truy vấn danh sách trên bảng chứa cột văn bản lớn (`TEXT` chương truyện); luôn dùng chiếu nhẹ `NULL AS content`.
+  2. Trên bảng cha có `FOREIGN KEY ... ON DELETE CASCADE`, tuyệt đối không dùng `INSERT OR REPLACE` khi mục đích là hợp nhất (merge) dữ liệu sao lưu; phải dùng `INSERT OR IGNORE` kết hợp `UPDATE`.
+  3. Mọi khối `catch (e: Exception)` hoặc hàm chuyển đổi ngoại lệ trong `suspend fun` bắt buộc phải kiểm tra `if (e is CancellationException) throw e` ở dòng đầu tiên.
+  4. Khi thêm tham số mặc định (như `nowMillis: Long = System.currentTimeMillis()`) vào hàm `suspend` đang được MockK stub trong unit test, luôn giữ một hàm overload không tham số gọi sang hàm có tham số để tránh lệch giá trị mặc định tại thời điểm stubbing so với thời điểm gọi.
 
 ## Build / Gradle / CI
 
-_Chưa có entry._
+### 2026-10-19: Khắc phục Mirror Tests, Cổng Android Lint `abortOnError`, ProGuard `@Serializable`, Cleartext HTTP, Cache TTL `BaseScraper` và Xóa Cookie Đa Miền
+
+- **Triệu chứng**:
+  1. Một số Unit Test (`TtsManagerTest`, `NavigationUtilsTest`) định nghĩa lại hàm `private fun` bên trong file test thay vì gọi hàm thực tế của production code; `TangThuVienScraper` chưa có unit test `MockWebServer`; `TestJsoup.java` và `LacaTruyenApiTest.kt` gọi mạng thật hoặc chỉ in `println` mà không có assertion.
+  2. `app/build.gradle.kts` đặt `lint { abortOnError = false }`, khiến các lỗi Android Lint (`ContextCastToActivity` trên `ReaderScreen.kt`, `NonObservableLocale` trên `SettingsScreen.kt`) không chặn build; trên Windows, `local.properties` chứa đường dẫn SDK có dấu `\` bị Lint bắt lỗi `PropertyEscape`.
+  3. `AndroidManifest.xml` bật `android:usesCleartextTraffic="true"` trên toàn ứng dụng; một số dữ liệu truyện cũ trong Room DB hoặc HTML trả về URL ảnh bìa/chương `http://` sẽ bị chặn ngầm khi khóa cleartext nếu không tự động nâng cấp lên `https://`.
+  4. `BaseScraper.responseCache` lưu kết quả HTML trong RAM suốt phiên chạy mà không có thời hạn (TTL), khiến danh sách chương mới hoặc trạng thái truyện sau khi đăng nhập bị cũ.
+  5. `AndroidCookieStore.removeCookies` với `cookieNames.isEmpty()` chỉ ghi đè `name=` mà không kèm `Domain=.$domain`, nên các cookie phiên làm việc đặt ở cấp miền cha (như `.wikicv.org`) không bị xóa sạch khỏi `CookieManager`.
+- **Nguyên nhân gốc**:
+  1. Khi viết test ban đầu cho các hàm `internal`/`private`, người viết copy logic sang file test (Mirror Test) thay vì mở phạm vi `internal` trên hàm production; `TangThuVienScraper` hardcode hằng số `BASE_URL` nên khó trỏ vào `MockWebServer`.
+  2. `abortOnError = false` được tắt tạm thời khi khởi tạo project nhưng chưa được bật lại kèm cấu hình `app/lint.xml` cho `PropertyEscape` trên Windows.
+  3. Chưa có cơ chế tự động chuẩn hóa `http://` → `https://` ở tầng Scraper (`validateCoverUrl`, `fixUrl`) và Repository (`upgradeToHttps`).
+  4. `CacheEntry` trong `BaseScraper` chưa lưu `timestamp: Long` để kiểm tra hạn sử dụng.
+  5. `CookieManager.setCookie` của Android WebView phân biệt cookie host-only và domain cookie có thuộc tính `Domain=.<host>`.
+- **Cách sửa**:
+  1. Thêm `customBaseUrl: String? = null` vào `TangThuVienScraper` và tạo `TangThuVienScraperTest` (5 `@Test` `MockWebServer`); xóa sạch các hàm mirror trong `TtsManagerTest` và `NavigationUtilsTest` để gọi trực tiếp hàm `internal` của production code; chuyển `TestJsoup` và `LacaTruyenApiTest` (`BaseScraperCacheTest`) sang offline fixture / `MockWebServer` với assertions đầy đủ; xóa file mã chết `CryptoJS.kt`.
+  2. Tạo `app/lint.xml` bỏ qua `PropertyEscape` cho `local.properties`, bật `abortOnError = true` trong `app/build.gradle.kts`, dùng `LocalActivity.current` trong `ReaderScreen.kt` và `Locale.ROOT` trong `SettingsScreen.kt`; thu hẹp rule ProGuard Jsoup và giữ `@Serializable class com.personal.apptruyen.data.model.**`.
+  3. Đặt `android:usesCleartextTraffic="false"` trong `AndroidManifest.xml` và tự động nâng cấp `http://` → `https://` tại `BaseScraper.validateCoverUrl`, `WikidichScraper.fixUrl` và `StoryRepository.upgradeToHttps`.
+  4. Thêm `CACHE_TTL_MS = 10 * 60 * 1000L` và `nowMs()` vào `BaseScraper.kt` để tự động loại bỏ bản ghi cache quá 10 phút.
+  5. Trong `AndroidCookieStore.removeCookies`, chuẩn hóa `normalizedUrl`, xóa cả bản ghi host-only lẫn `Domain=.$domain` khi `cookieNames.isEmpty()`, và luôn gọi `cookieManager.flush()`.
+- **Quy tắc phòng ngừa**:
+  1. Tuyệt đối cấm viết "Mirror Test" (sao chép hàm từ `src/main` sang `src/test`); mọi unit test phải gọi trực tiếp hàm/lớp thực tế của production code và không được gọi mạng thật.
+  2. Luôn duy trì `lint { abortOnError = true }` trong `app/build.gradle.kts` và kiểm chứng bằng `.\gradlew.bat lintDebug` trước khi hoàn tất.
+  3. Khi giữ `android:usesCleartextTraffic="false"`, mọi điểm tiếp nhận URL từ HTML/DB (ảnh bìa, URL truyện, URL chương) phải có bước nâng cấp `http://` → `https://` cho các nguồn hỗ trợ HTTPS.
+

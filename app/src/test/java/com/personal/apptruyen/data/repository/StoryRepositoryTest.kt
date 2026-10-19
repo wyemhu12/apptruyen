@@ -16,6 +16,7 @@ import com.personal.apptruyen.data.remote.ScraperCircuitBreaker
 import com.personal.apptruyen.data.remote.ScraperException
 import com.personal.apptruyen.data.remote.StorySource
 import io.mockk.*
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.toList
@@ -55,6 +56,10 @@ class StoryRepositoryTest {
         chapterDao = mockk(relaxed = true)
         progressDao = mockk(relaxed = true)
         transactionRunner = mockk(relaxed = true)
+        coEvery { transactionRunner.withWriteTransaction<Any?>(any()) } coAnswers {
+            val block = firstArg<suspend () -> Any?>()
+            block.invoke()
+        }
         dataStore = mockk(relaxed = true)
         authRepository = mockk(relaxed = true)
         every { dataStore.data } returns flowOf(emptyPreferences())
@@ -74,6 +79,7 @@ class StoryRepositoryTest {
                 dataStore,
                 ScraperCircuitBreaker(),
                 authRepository,
+                transactionRunner,
             )
         downloadRepository =
             DownloadRepository(
@@ -135,6 +141,105 @@ class StoryRepositoryTest {
             assertEquals("Web Story", result.title)
             coVerify(exactly = 1) { source.getStoryDetail(any()) }
             coVerify(exactly = 1) { storyDao.insertStory(any()) }
+        }
+
+    @Test
+    fun `getStoryDetail returns cached Wikidich story by prefixed ID when offline`() =
+        runTest {
+            val wikiSource = mockk<StorySource>()
+            every { wikiSource.sourceId } returns "wikidich"
+            every { wikiSource.sourceName } returns "Wikidich"
+            every { wikiSource.baseUrl } returns "https://truyenwikidich.net"
+            every { wikiSource.legacyHosts } returns listOf("wikidich.com")
+
+            val repo =
+                StoryRepository(
+                    setOf(wikiSource),
+                    storyDao,
+                    chapterDao,
+                    testScope,
+                    dataStore,
+                    ScraperCircuitBreaker(),
+                    authRepository,
+                    transactionRunner,
+                )
+
+            val cachedEntity =
+                StoryEntity(
+                    id = "wikidich_ta-co-mot-toa-kinh-hoang-nha-6789",
+                    slug = "ta-co-mot-toa-kinh-hoang-nha-6789",
+                    title = "Ta Có Một Tòa Kinh Hoàng Nhà",
+                    author = "Ngoạn Hỏa",
+                    url = "https://truyenwikidich.net/truyen/ta-co-mot-toa-kinh-hoang-nha-6789",
+                    sourceId = "wikidich",
+                    isInLibrary = true,
+                )
+            coEvery { storyDao.getStoryByUrl(any()) } returns null
+            coEvery { storyDao.getStoryById("wikidich_ta-co-mot-toa-kinh-hoang-nha-6789") } returns cachedEntity
+
+            val result = repo.getStoryDetail("https://truyenwikidich.net/truyen/ta-co-mot-toa-kinh-hoang-nha-6789")
+            assertEquals("wikidich_ta-co-mot-toa-kinh-hoang-nha-6789", result.id)
+            assertEquals("Ta Có Một Tòa Kinh Hoàng Nhà", result.title)
+            coVerify(exactly = 0) { wikiSource.getStoryDetail(any()) }
+        }
+
+    @Test
+    fun `getStoryDetail does not collide across sources sharing the same raw slug`() =
+        runTest {
+            val ttvSource = mockk<StorySource>()
+            every { ttvSource.sourceId } returns "tangthuvien"
+            every { ttvSource.sourceName } returns "Tàng Thư Viện"
+            every { ttvSource.baseUrl } returns "https://truyen.tangthuvien.vn"
+            every { ttvSource.legacyHosts } returns emptyList()
+
+            val ssSource = mockk<StorySource>()
+            every { ssSource.sourceId } returns "sstruyen"
+            every { ssSource.sourceName } returns "SsTruyện"
+            every { ssSource.baseUrl } returns "https://sstruyen.pics"
+            every { ssSource.legacyHosts } returns emptyList()
+
+            val repo =
+                StoryRepository(
+                    setOf(ttvSource, ssSource),
+                    storyDao,
+                    chapterDao,
+                    testScope,
+                    dataStore,
+                    ScraperCircuitBreaker(),
+                    authRepository,
+                    transactionRunner,
+                )
+
+            // Legacy TangThuVien story cached with raw slug "pham-nhan-tu-tien"
+            val legacyTtvEntity =
+                StoryEntity(
+                    id = "pham-nhan-tu-tien",
+                    slug = "pham-nhan-tu-tien",
+                    title = "Phàm Nhân Tu Tiên (TTV)",
+                    url = "https://truyen.tangthuvien.vn/doc-truyen/pham-nhan-tu-tien",
+                    sourceId = "tangthuvien",
+                )
+            coEvery { storyDao.getStoryByUrl(any()) } returns null
+            coEvery { storyDao.getStoryById("sstruyen_pham-nhan-tu-tien") } returns null
+            coEvery { storyDao.getStoryById("pham-nhan-tu-tien") } returns legacyTtvEntity
+
+            val ssStory =
+                Story(
+                    id = "sstruyen_pham-nhan-tu-tien",
+                    slug = "pham-nhan-tu-tien",
+                    title = "Phàm Nhân Tu Tiên (SsTruyện)",
+                    url = "https://sstruyen.pics/truyen/pham-nhan-tu-tien",
+                    sourceId = "sstruyen",
+                )
+            coEvery { ssSource.getStoryDetail("https://sstruyen.pics/truyen/pham-nhan-tu-tien") } returns ssStory
+            val insertedSlot = slot<StoryEntity>()
+            coEvery { storyDao.insertStory(capture(insertedSlot)) } just Runs
+
+            // Opening SsTruyen URL with same slug must NOT return TTV's cached entity or overwrite it
+            val result = repo.getStoryDetail("https://sstruyen.pics/truyen/pham-nhan-tu-tien")
+            assertEquals("sstruyen_pham-nhan-tu-tien", result.id)
+            assertEquals("sstruyen", result.sourceId)
+            assertEquals("sstruyen_pham-nhan-tu-tien", insertedSlot.captured.id)
         }
 
     // ----- searchStories -----
@@ -202,7 +307,7 @@ class StoryRepositoryTest {
                     Chapter(storyId = "s.1", chapterNumber = 2, title = "Ch 2", url = "https://truyencom.com/url2"),
                 )
             coEvery { source.getChapterContentWithTitle(any()) } returns ChapterContentResult("content")
-            coEvery { chapterDao.saveChapterContent(any(), any(), any()) } just Runs
+            coEvery { chapterDao.saveChapterContent(any(), any(), any(), any(), any(), any()) } just Runs
 
             val progress = downloadRepository.downloadChapters("s.1", chapters).toList()
 
@@ -222,12 +327,14 @@ class StoryRepositoryTest {
                 )
             coEvery { source.getChapterContentWithTitle("https://truyencom.com/url1") } throws Exception("Error")
             coEvery { source.getChapterContentWithTitle("https://truyencom.com/url2") } returns ChapterContentResult("content")
-            coEvery { chapterDao.saveChapterContent(any(), any(), any()) } just Runs
+            coEvery { chapterDao.saveChapterContent(any(), any(), any(), any(), any(), any()) } just Runs
 
             val progress = downloadRepository.downloadChapters("s.1", chapters).toList()
 
-            // Should still complete both chapters despite error on first
-            assertEquals(2, progress.last().current)
+            // Should complete both chapters with 1 downloaded, 1 error, 2 processed
+            assertEquals(1, progress.last().current)
+            assertEquals(1, progress.last().errors)
+            assertEquals(2, progress.last().processed)
         }
 
     // ----- Reading Progress (ReadingProgressRepository) -----
@@ -357,6 +464,7 @@ class StoryRepositoryTest {
                     dataStore,
                     ScraperCircuitBreaker(),
                     authRepository,
+                    transactionRunner,
                 )
 
             val result = customRepo.getStoryDetail("https://sstruyen.net/truyen/tien-nghich")
@@ -414,6 +522,7 @@ class StoryRepositoryTest {
                     dataStore,
                     ScraperCircuitBreaker(),
                     authRepository,
+                    transactionRunner,
                 )
 
             val result = customRepo.getFirstPageChapterList(storyUrl, storyId)
@@ -499,5 +608,175 @@ class StoryRepositoryTest {
                     }
                 }
             assertTrue(exception.message?.contains("không được hỗ trợ") == true)
+        }
+
+    @Test
+    fun `mergeAndInsertChapters runs in writeTransaction and skips updateChapterMetadata for unchanged chapters or blank new url`() =
+        runTest {
+            val storyId = "test.1"
+            val storyUrl = "https://truyencom.com/test.1/"
+            val existingChapters =
+                listOf(
+                    ChapterEntity(
+                        storyId = storyId,
+                        chapterNumber = 1,
+                        title = "Chương 1",
+                        url = "https://truyencom.com/test.1/c1",
+                        isDownloaded = false,
+                    ),
+                    ChapterEntity(
+                        storyId = storyId,
+                        chapterNumber = 2,
+                        title = "Chương 2",
+                        url = "https://truyencom.com/test.1/c2",
+                        isDownloaded = true,
+                    ),
+                )
+            coEvery { chapterDao.getChaptersByStoryOnce(storyId) } returns existingChapters
+            coEvery { source.getFirstPageChapters(storyUrl) } returns
+                StorySource.FirstPageResult(
+                    chapters =
+                        listOf(
+                            // Unchanged title and url -> must skip updateChapterMetadata
+                            Chapter(storyId, 1, "Chương 1", "https://truyencom.com/test.1/c1"),
+                            // Blank new url -> must retain existing url and skip updateChapterMetadata
+                            Chapter(storyId, 2, "Chương 2 Mới", ""),
+                            // New chapter -> must be inserted via insertChaptersIgnore
+                            Chapter(storyId, 3, "Chương 3", "https://truyencom.com/test.1/c3"),
+                        ),
+                    totalPages = 1,
+                )
+
+            storyRepository.getFirstPageChapterList(storyUrl, storyId)
+
+            coVerify(atLeast = 1) { transactionRunner.withWriteTransaction<Any?>(any()) }
+            coVerify(exactly = 1) { chapterDao.insertChaptersIgnore(any()) }
+            coVerify(exactly = 0) { chapterDao.updateChapterMetadata(any(), any(), any(), any()) }
+        }
+
+    @Test
+    fun `resolveSafeCoverUrl and resolveSafeTotalChapters filter base64 data urls and preserve positive chapter counts`() {
+        assertEquals(
+            "https://example.com/old.jpg",
+            resolveSafeCoverUrl(
+                freshCoverUrl = "data:image/jpeg;base64,/9j/4AAQSkZJRg==",
+                existingCoverUrl = "https://example.com/old.jpg",
+            ),
+        )
+        assertEquals(
+            "",
+            resolveSafeCoverUrl(
+                freshCoverUrl = "data:image/png;base64,abc",
+                existingCoverUrl = "data:image/png;base64,old",
+            ),
+        )
+        assertEquals(
+            "https://example.com/new.jpg",
+            resolveSafeCoverUrl(
+                freshCoverUrl = "https://example.com/new.jpg",
+                existingCoverUrl = "https://example.com/old.jpg",
+            ),
+        )
+
+        assertEquals(120, resolveSafeTotalChapters(freshTotal = 0, existingTotal = 120))
+        assertEquals(150, resolveSafeTotalChapters(freshTotal = 150, existingTotal = 120))
+        assertEquals(0, resolveSafeTotalChapters(freshTotal = -1, existingTotal = 0))
+    }
+
+    @Test
+    fun `refreshLibraryStories guards zero totalChapters and base64 coverImageUrl`() =
+        runTest {
+            val libStory =
+                StoryEntity(
+                    id = "test.1",
+                    slug = "test",
+                    title = "Truyện Thư Viện",
+                    author = "Tác giả",
+                    genres = "Tiên Hiệp",
+                    description = "Mô tả",
+                    url = "https://truyencom.com/test.1/",
+                    totalChapters = 300,
+                    coverImageUrl = "https://truyencom.com/cover.jpg",
+                    isInLibrary = true,
+                    sourceId = "truyencom",
+                    status = "Đang ra",
+                    storyReplacementsEnabled = true,
+                    storyCustomReplacements = "x=y",
+                )
+            coEvery { storyDao.getLibraryStoriesOnce() } returns listOf(libStory)
+            coEvery { source.getStoryDetail("https://truyencom.com/test.1/") } returns
+                Story(
+                    id = "test.1",
+                    slug = "test",
+                    title = "Truyện Thư Viện",
+                    author = "Tác giả",
+                    genres = listOf("Tiên Hiệp"),
+                    description = "Mô tả mới",
+                    url = "https://truyencom.com/test.1/",
+                    totalChapters = 0,
+                    coverImageUrl = "data:image/png;base64,AAA",
+                    sourceId = "truyencom",
+                    status = "Đang ra",
+                )
+            val savedSlot = slot<StoryEntity>()
+            coEvery { storyDao.insertStory(capture(savedSlot)) } just Runs
+
+            storyRepository.refreshLibraryStories()
+
+            assertEquals(300, savedSlot.captured.totalChapters)
+            assertEquals("https://truyencom.com/cover.jpg", savedSlot.captured.coverImageUrl)
+            assertTrue(savedSlot.captured.storyReplacementsEnabled)
+            assertEquals("x=y", savedSlot.captured.storyCustomReplacements)
+        }
+
+    @Test
+    fun `getChapterList and getFirstPageChapterList rethrow CancellationException instead of falling back to cache`() =
+        runTest {
+            coEvery { source.getChapterList(any()) } throws CancellationException("cancelled")
+            coEvery { source.getFirstPageChapters(any()) } throws CancellationException("cancelled")
+
+            assertThrows(CancellationException::class.java) {
+                kotlinx.coroutines.runBlocking {
+                    storyRepository.getChapterList("https://truyencom.com/test.1/", "test.1")
+                }
+            }
+            assertThrows(CancellationException::class.java) {
+                kotlinx.coroutines.runBlocking {
+                    storyRepository.getFirstPageChapterList("https://truyencom.com/test.1/", "test.1")
+                }
+            }
+        }
+
+    @Test
+    fun `upgradeToHttps and toDomain upgrade http covers across StoryRepository DownloadRepository and ReadingProgressRepository`() =
+        runTest {
+            assertEquals("https://example.com/a.jpg", upgradeToHttps("http://example.com/a.jpg"))
+            assertEquals("https://example.com/new.jpg", resolveSafeCoverUrl("http://example.com/new.jpg", null))
+            assertEquals("https://example.com/old.jpg", resolveSafeCoverUrl("data:image/png;base64,AAA", "http://example.com/old.jpg"))
+            assertEquals("http://localhost:8080/local.jpg", resolveSafeCoverUrl("http://localhost:8080/local.jpg", null))
+
+            val cachedEntity =
+                StoryEntity(
+                    id = "test.http",
+                    slug = "test.http",
+                    title = "Test HTTP Cover",
+                    author = "Author",
+                    url = "https://truyencom.com/test.http/",
+                    coverImageUrl = "http://example.com/cached.jpg",
+                    sourceId = "truyencom",
+                )
+            coEvery { storyDao.getStoryById("test.http") } returns cachedEntity
+            every { storyDao.getDownloadedStories() } returns
+                flowOf(listOf(cachedEntity.copy(coverImageUrl = "http://example.com/dl.jpg")))
+            every { storyDao.getRecentlyReadStories() } returns
+                flowOf(listOf(cachedEntity.copy(coverImageUrl = "http://example.com/recent.jpg")))
+
+            val detail = storyRepository.getStoryDetail("https://truyencom.com/test.http/")
+            val downloaded = downloadRepository.getDownloadedStories().first()
+            val recent = readingProgressRepository.getRecentlyReadStories().first()
+
+            assertEquals("https://example.com/cached.jpg", detail.coverImageUrl)
+            assertEquals("https://example.com/dl.jpg", downloaded.single().coverImageUrl)
+            assertEquals("https://example.com/recent.jpg", recent.single().coverImageUrl)
         }
 }

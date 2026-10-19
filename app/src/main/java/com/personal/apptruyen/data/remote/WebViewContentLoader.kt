@@ -12,6 +12,9 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
+import timber.log.Timber
+import java.net.URI
+import java.util.Locale
 import java.util.concurrent.atomic.AtomicBoolean
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -27,16 +30,33 @@ class WebViewContentLoader
         @ApplicationContext private val context: Context,
     ) {
         companion object {
+            private const val TAG = "WebViewContentLoader"
             private const val LOAD_TIMEOUT_MS = 15_000L
 
             // Allowed domains for WebView content loading
-            private val ALLOWED_DOMAINS =
-                listOf(
+            val ALLOWED_DOMAINS =
+                setOf(
+                    "tangthuvien.org",
                     "tangthuvien.vn",
+                    "sstruyen.pics",
+                    "sstruyen.vn",
                     "sstruyen.net",
                     "wikicv.org",
                     "wikicv.net",
                 )
+
+            fun isAllowedDomain(
+                host: String?,
+                allowedDomains: Collection<String> = ALLOWED_DOMAINS,
+            ): Boolean {
+                val normalizedHost = host?.trim()?.lowercase(Locale.ROOT)?.trimEnd('.') ?: return false
+                if (normalizedHost.isEmpty()) return false
+                return allowedDomains.any { domain ->
+                    val normalizedDomain = domain.trim().lowercase(Locale.ROOT).trimEnd('.')
+                    normalizedDomain.isNotEmpty() &&
+                        (normalizedHost == normalizedDomain || normalizedHost.endsWith(".$normalizedDomain"))
+                }
+            }
 
             // JS to extract chapter content after page loads
             private const val EXTRACT_JS = """
@@ -85,7 +105,14 @@ class WebViewContentLoader
         @SuppressLint("SetJavaScriptEnabled")
         suspend fun loadContent(url: String): String? =
             withContext(Dispatchers.Main) {
+                val initialHost = runCatching { URI(url).host }.getOrNull()
+                if (!isAllowedDomain(initialHost, ALLOWED_DOMAINS)) {
+                    Timber.w("%s: Blocked initial URL outside allowed domains: %s", TAG, initialHost)
+                    return@withContext null
+                }
+
                 val deferred = CompletableDeferred<String?>()
+                val mainHandler = Handler(Looper.getMainLooper())
 
                 val webView =
                     WebView(context).apply {
@@ -95,11 +122,13 @@ class WebViewContentLoader
                         settings.userAgentString = BaseScraper.DEFAULT_MOBILE_UA // M3: Reuse shared constant
                     }
 
-                // Guard against double-destroy (onPageFinished/onReceivedError + timeout)
+                // Guard against double-destroy (onPageFinished/onReceivedError + timeout/cancellation)
                 val isDestroyed = AtomicBoolean(false)
 
                 fun safeDestroyWebView() {
                     if (isDestroyed.compareAndSet(false, true)) {
+                        mainHandler.removeCallbacksAndMessages(null)
+                        webView.stopLoading()
                         webView.destroy()
                     }
                 }
@@ -110,10 +139,7 @@ class WebViewContentLoader
                         override fun shouldOverrideUrlLoading(
                             view: WebView,
                             request: WebResourceRequest,
-                        ): Boolean {
-                            val host = request.url?.host.orEmpty()
-                            return !ALLOWED_DOMAINS.any { host.endsWith(it) }
-                        }
+                        ): Boolean = !isAllowedDomain(request.url?.host, ALLOWED_DOMAINS)
 
                         override fun onPageFinished(
                             view: WebView?,
@@ -122,7 +148,7 @@ class WebViewContentLoader
                             // Guard: WebView may have been destroyed by onReceivedError or timeout
                             if (isDestroyed.get()) return
                             // Wait a bit for JS to finish rendering
-                            Handler(Looper.getMainLooper()).postDelayed({
+                            mainHandler.postDelayed({
                                 // Guard: WebView may have been destroyed during delay
                                 if (isDestroyed.get()) return@postDelayed
                                 webView.evaluateJavascript(EXTRACT_JS) { result ->
@@ -155,15 +181,14 @@ class WebViewContentLoader
                         }
                     }
 
-                webView.loadUrl(url)
-
-                // Timeout fallback
-                withTimeoutOrNull(LOAD_TIMEOUT_MS) {
-                    deferred.await()
-                } ?: run {
-                    deferred.complete(null) // Prevent leak: complete before destroy
+                try {
+                    webView.loadUrl(url)
+                    withTimeoutOrNull(LOAD_TIMEOUT_MS) {
+                        deferred.await()
+                    }
+                } finally {
+                    deferred.complete(null)
                     safeDestroyWebView()
-                    null
                 }
             }
     }

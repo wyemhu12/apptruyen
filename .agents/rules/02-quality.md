@@ -19,6 +19,7 @@ Trước khi viết code, xác định domain của task và đọc tài liệu 
 | Tính năng mới                | `docs/architecture.md`, `docs/progress.md`, `docs/contributing.md`        | **.agents/rules/05-plan-review.md** |
 | Lập kế hoạch task            | `docs/plans/README.md`, `.agents/rules/05-plan-review.md`                 | **.agents/rules/05-plan-review.md** |
 | Sửa bug                      | `docs/lessons-learned.md`                                                 | **.agents/workflows/debug.md**      |
+| Rà soát chất lượng code      | `.agents/rules/01-coding.md`                                              | **.agents/workflows/audit.md**      |
 | Refactor / tách file         | `.agents/rules/01-coding.md` (Kích thước file)                            |                                     |
 | Sau khi đổi code             | `.agents/rules/06-docs.md`                                                | **.agents/workflows/update-docs.md** |
 
@@ -62,8 +63,9 @@ NGHIÊM CẤM HẠ THẤP TIÊU CHUẨN TEST:
 Test Integrity Guard (hook) sẽ phát hiện, và `@qa` đánh lỗi `[BLOCKER]`.
 </important>
 
-## Phân Định: Debug Workflow / `@qa`
+## Phân Định: Audit Workflow / Debug Workflow / `@qa`
 
+- `.agents/workflows/audit.md`: rà soát chất lượng code định kỳ cho một file hoặc cụm tính năng (kiến trúc, coding standards, UI tiếng Việt, stale patterns, verify).
 - `.agents/workflows/debug.md`: bug không hiển nhiên hoặc tái diễn. Không sửa khi chưa xác nhận root cause.
 - `@qa`: chỉ chạy khi User gọi. Nghiệm thu một task cụ thể theo plan (7 bước), có Verification Gate và Test Integrity Audit.
 

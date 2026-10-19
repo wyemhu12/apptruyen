@@ -257,4 +257,93 @@ class WikidichScraperTest {
             assertTrue(requestedPaths.first().contains("/tim-kiem?q=hogwarts&qs=1"))
             assertEquals(245, searchStories.first().totalChapters)
         }
+
+    @Test
+    fun `getRemainingChapters delays crawlDelayMs between AJAX pagination pages`() =
+        runTest {
+            val storyHtml = loadFixture("story_detail.html")
+            val p2Html = loadFixture("chapter_index_ajax_p2.html")
+
+            var ajaxCalls = 0
+            val callTimestamps = mutableListOf<Long>()
+            server.dispatcher =
+                object : Dispatcher() {
+                    override fun dispatch(request: RecordedRequest): MockResponse =
+                        if (request.url.encodedPath.contains("/book/index")) {
+                            ajaxCalls++
+                            callTimestamps.add(System.currentTimeMillis())
+                            if (ajaxCalls == 1) {
+                                // Page 2 has link to start=198 (Page 3)
+                                MockResponse(code = 200, body = p2Html)
+                            } else {
+                                // Page 3 (start=198) is the last page -> remove link to start=297
+                                val lastPageHtml = p2Html.replace("data-start=\"297\"", "data-start=\"none\"")
+                                MockResponse(code = 200, body = lastPageHtml)
+                            }
+                        } else {
+                            MockResponse(code = 200, body = storyHtml)
+                        }
+                }
+
+            val batches = mutableListOf<Int>()
+            scraper.getRemainingChapters(server.url("/truyen/sample").toString(), 3) { batch ->
+                batches.add(batch.size)
+            }
+
+            assertEquals(2, ajaxCalls)
+            assertEquals(listOf(99, 99), batches)
+            val gapMs = callTimestamps[1] - callTimestamps[0]
+            assertTrue(gapMs >= 250L, "Expected delay >= 250ms between AJAX pages, got ${gapMs}ms")
+        }
+
+    @Test
+    fun `search retries on HTTP 503 and does not retry on HTTP 404`() =
+        runTest {
+            val html = loadFixture("search_logged_in.html")
+            server.enqueue(MockResponse(code = 503, body = "Service Unavailable"))
+            server.enqueue(MockResponse(code = 200, body = html))
+
+            val stories = scraper.search("retry_test", false)
+            assertTrue(stories.isNotEmpty())
+            assertEquals(2, server.requestCount)
+
+            // Now test HTTP 404 (non-retryable)
+            server.enqueue(MockResponse(code = 404, body = "Not Found"))
+            val ex =
+                assertThrows(ScraperException.HttpException::class.java) {
+                    kotlinx.coroutines.runBlocking {
+                        scraper.search("not_found_test", false)
+                    }
+                }
+            assertEquals(404, ex.statusCode)
+            assertEquals(3, server.requestCount)
+        }
+
+    @Test
+    fun `search upgrades http story url and coverImageUrl to https while preserving localhost`() =
+        runTest {
+            val html =
+                """
+                <html><body>
+                  <div class="book-item">
+                    <div class="cover-col"><img src="http://cdn.truyenwikidich.net/covers/a.jpg"/></div>
+                    <div class="info-col">
+                      <a class="tooltipped" href="http://truyenwikidich.net/truyen/tien-nghich-123">Tiên Nghịch</a>
+                    </div>
+                  </div>
+                  <div class="book-item">
+                    <div class="cover-col"><img src="http://localhost:8080/covers/b.jpg"/></div>
+                    <div class="info-col">
+                      <a class="tooltipped" href="/truyen/pham-nhan-456">Phàm Nhân</a>
+                    </div>
+                  </div>
+                </body></html>
+                """.trimIndent()
+            server.enqueue(MockResponse(code = 200, body = html))
+            val stories = scraper.search("tien", completedOnly = false)
+            assertEquals(2, stories.size)
+            assertEquals("https://truyenwikidich.net/truyen/tien-nghich-123", stories[0].url)
+            assertEquals("https://cdn.truyenwikidich.net/covers/a.jpg", stories[0].coverImageUrl)
+            assertEquals("http://localhost:8080/covers/b.jpg", stories[1].coverImageUrl)
+        }
 }

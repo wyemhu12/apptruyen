@@ -8,6 +8,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import okhttp3.OkHttpClient
@@ -115,7 +116,7 @@ class WikidichScraper
                 val encoded = URLEncoder.encode(keyword, "UTF-8")
                 // Chế độ 1 trên wikicv.org: Tìm kiếm theo từ khóa (?q=<keyword>&qs=1)
                 val url = "$baseUrl/tim-kiem?q=$encoded&qs=1"
-                val doc = fetchDocument(url)
+                val doc = fetchDocumentWithRetry(url)
                 checkLoginRequired(doc)
                 val stories = parseStoryList(doc)
                 val filtered =
@@ -133,7 +134,7 @@ class WikidichScraper
 
         override suspend fun getStoryDetail(storyUrl: String): Story =
             withContext(Dispatchers.IO) {
-                val doc = fetchDocument(storyUrl)
+                val doc = fetchDocumentWithRetry(storyUrl)
                 checkLoginRequired(doc)
 
                 val title =
@@ -192,7 +193,7 @@ class WikidichScraper
 
         override suspend fun getFirstPageChapters(storyUrl: String): StorySource.FirstPageResult =
             withContext(Dispatchers.IO) {
-                val doc = fetchDocument(storyUrl)
+                val doc = fetchDocumentWithRetry(storyUrl)
                 checkLoginRequired(doc)
 
                 val (bookId, cut, signKey) = extractSecurityParams(doc.html(), storyUrl)
@@ -227,7 +228,7 @@ class WikidichScraper
             totalPages: Int,
             onBatchReady: suspend (List<Chapter>) -> Unit,
         ) = withContext(Dispatchers.IO) {
-            val doc = fetchDocument(storyUrl)
+            val doc = fetchDocumentWithRetry(storyUrl)
             checkLoginRequired(doc)
 
             val (bookId, cut, signKey) = extractSecurityParams(doc.html(), storyUrl)
@@ -254,6 +255,7 @@ class WikidichScraper
                     break
                 }
 
+                delay(crawlDelayMs)
                 currentStart = nextStart
                 pageCount++
             }
@@ -261,7 +263,7 @@ class WikidichScraper
 
         override suspend fun getChapterContent(chapterUrl: String): String =
             withContext(Dispatchers.IO) {
-                val doc = fetchDocument(chapterUrl)
+                val doc = fetchDocumentWithRetry(chapterUrl)
                 checkLoginRequired(doc)
 
                 val bodyElement =
@@ -295,13 +297,13 @@ class WikidichScraper
             withContext(Dispatchers.IO) {
                 val startParam = if (page > 1) "&start=${(page - 1) * SEARCH_PAGE_SIZE}" else ""
                 val url = "$baseUrl/bang-xep-hang?so=5$startParam"
-                val doc = fetchDocument(url)
+                val doc = fetchDocumentWithRetry(url)
                 checkLoginRequired(doc)
                 val stories = parseStoryList(doc)
                 if (stories.isNotEmpty()) {
                     stories.map { it.copy(status = "Hoàn thành") }
                 } else {
-                    val fallbackDoc = fetchDocument("$baseUrl/tim-kiem?status=5794f03dd7ced228f4419191&qs=2$startParam")
+                    val fallbackDoc = fetchDocumentWithRetry("$baseUrl/tim-kiem?status=5794f03dd7ced228f4419191&qs=2$startParam")
                     checkLoginRequired(fallbackDoc)
                     parseStoryList(fallbackDoc).map { it.copy(status = "Hoàn thành") }
                 }
@@ -322,7 +324,7 @@ class WikidichScraper
                 val startParam = if (page > 1) "&start=${(page - 1) * SEARCH_PAGE_SIZE}" else ""
                 // Chế độ 2 trên wikicv.org: Tìm kiếm theo bộ lọc (status, tag/genre/age/gender, tc, tf=0, m, y, q=)
                 val url = "$baseUrl/tim-kiem?qs=1$statusParam&$filterParam&tc=&tf=0&m=$month&y=$year&q=$startParam"
-                val doc = fetchDocument(url)
+                val doc = fetchDocumentWithRetry(url)
                 checkLoginRequired(doc)
                 val stories = parseStoryList(doc)
                 if (completedOnly) {
@@ -424,7 +426,7 @@ class WikidichScraper
                                     } else {
                                         try {
                                             withTimeoutOrNull(ENRICH_TIMEOUT_MS) {
-                                                val detailDoc = fetchDocument(story.url)
+                                                val detailDoc = fetchDocumentWithRetry(story.url)
                                                 val total = extractTotalChaptersFromDetail(detailDoc)
                                                 if (total > 0) story.copy(totalChapters = total) else story
                                             } ?: story
@@ -593,23 +595,37 @@ class WikidichScraper
                     .header("Referer", referer)
                     .build()
 
-            try {
-                client.newCall(request).execute().use { response ->
-                    if (!response.isSuccessful) {
-                        throw ScraperException.HttpException(response.code, url)
+            var lastException: Exception? = null
+            repeat(MAX_RETRIES) { attempt ->
+                try {
+                    client.newCall(request).execute().use { response ->
+                        if (!response.isSuccessful) {
+                            throw ScraperException.HttpException(response.code, url)
+                        }
+                        return response.body.string()
                     }
-                    return response.body.string()
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    val scraperEx = e.toScraperException(url)
+                    if (!isRetryableScraperException(scraperEx)) throw scraperEx
+                    lastException = scraperEx
+                    if (attempt < MAX_RETRIES - 1) {
+                        delay(INITIAL_BACKOFF_MS * (1L shl attempt))
+                    }
                 }
-            } catch (e: Exception) {
-                throw e.toScraperException(url)
             }
+            throw (lastException as? ScraperException)
+                ?: ScraperException.NetworkException("Không thể kết nối mạng. Vui lòng kiểm tra kết nối Internet.")
         }
 
         private fun cleanWatermark(text: String): String = WATERMARK_REGEX.replace(text, "").trim()
 
         private fun fixUrl(url: String): String =
             when {
-                url.startsWith("http://") || url.startsWith("https://") -> url
+                url.startsWith("https://") -> url
+                url.startsWith("http://localhost") || url.startsWith("http://127.0.0.1") -> url
+                url.startsWith("http://") -> "https://${url.removePrefix("http://")}"
                 url.startsWith("//") -> "https:$url"
                 url.startsWith("/") -> "$baseUrl$url"
                 else -> "$baseUrl/$url"

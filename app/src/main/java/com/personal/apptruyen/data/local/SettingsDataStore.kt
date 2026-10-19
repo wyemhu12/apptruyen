@@ -2,6 +2,7 @@ package com.personal.apptruyen.data.local
 
 import android.content.Context
 import androidx.datastore.core.DataStore
+import androidx.datastore.preferences.core.MutablePreferences
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
@@ -82,6 +83,77 @@ object SettingsKeys {
 
     /** Bật/tắt từ điển tra cứu hình ảnh & hệ Pokémon khi đọc truyện (mặc định: bật = true) */
     val POKEMON_LOOKUP_ENABLED = booleanPreferencesKey("pokemon_lookup_enabled")
+
+    fun restoreSettingFromBackup(
+        prefs: MutablePreferences,
+        key: String,
+        rawValue: String,
+    ) {
+        when (key) {
+            TTS_SPEED.name, FONT_SIZE.name, LINE_SPACING.name, TTS_PITCH.name -> {
+                rawValue.toFloatOrNull()?.let { prefs[floatPreferencesKey(key)] = it }
+            }
+            THEME.name, APP_THEME_MODE.name, FONT_FAMILY.name, PREFETCH_CHAPTERS.name, AUTO_SCROLL_SPEED.name -> {
+                // Remove any legacy Float entry under the same key name before writing Int
+                prefs.remove(floatPreferencesKey(key))
+                (rawValue.toIntOrNull() ?: rawValue.toFloatOrNull()?.toInt())?.let {
+                    prefs[intPreferencesKey(key)] = it
+                }
+            }
+            TEXT_REPLACEMENT_ENABLED.name, AUTO_FORMAT_ENABLED.name, PAGED_MODE.name,
+            IS_WIKIDICH_MIGRATED.name, DYNAMIC_COLOR.name, POKEMON_LOOKUP_ENABLED.name,
+            -> {
+                rawValue.toBooleanStrictOrNull()?.let { prefs[booleanPreferencesKey(key)] = it }
+            }
+            CUSTOM_REPLACEMENTS.name, TTS_VOICE.name, ENABLED_SOURCES.name -> {
+                prefs[stringPreferencesKey(key)] = rawValue
+            }
+        }
+    }
+}
+
+private val INT_SETTING_KEYS =
+    listOf(
+        SettingsKeys.THEME,
+        SettingsKeys.APP_THEME_MODE,
+        SettingsKeys.FONT_FAMILY,
+        SettingsKeys.PREFETCH_CHAPTERS,
+        SettingsKeys.AUTO_SCROLL_SPEED,
+    )
+
+fun Preferences.getIntSafe(
+    key: Preferences.Key<Int>,
+    defaultValue: Int,
+): Int {
+    val raw = asMap().entries.firstOrNull { it.key.name == key.name }?.value ?: return defaultValue
+    return when (raw) {
+        is Int -> raw
+        is Number -> raw.toInt()
+        is String -> raw.toIntOrNull() ?: raw.toFloatOrNull()?.toInt() ?: defaultValue
+        else -> defaultValue
+    }
+}
+
+suspend fun DataStore<Preferences>.healCorruptedIntPreferences() {
+    edit { prefs ->
+        val rawByName = prefs.asMap().entries.associate { it.key.name to it.value }
+        for (intKey in INT_SETTING_KEYS) {
+            val raw = rawByName[intKey.name] ?: continue
+            if (raw !is Int) {
+                prefs.remove(floatPreferencesKey(intKey.name))
+                prefs.remove(stringPreferencesKey(intKey.name))
+                val healed =
+                    when (raw) {
+                        is Number -> raw.toInt()
+                        is String -> raw.toIntOrNull() ?: raw.toFloatOrNull()?.toInt()
+                        else -> null
+                    }
+                if (healed != null) {
+                    prefs[intKey] = healed
+                }
+            }
+        }
+    }
 }
 
 /**

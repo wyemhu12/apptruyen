@@ -1,45 +1,105 @@
 package com.personal.apptruyen.data.remote
 
-import okhttp3.MediaType.Companion.toMediaType
+import com.personal.apptruyen.data.model.Chapter
+import com.personal.apptruyen.data.model.Genre
+import com.personal.apptruyen.data.model.Story
+import mockwebserver3.MockResponse
+import mockwebserver3.MockWebServer
 import okhttp3.OkHttpClient
-import okhttp3.Request
-import okhttp3.RequestBody.Companion.toRequestBody
-import org.junit.jupiter.api.Disabled
+import org.jsoup.nodes.Document
+import org.junit.jupiter.api.AfterEach
+import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 
-@Disabled("Exploratory test — gọi network thật, chỉ chạy thủ công")
-class LacaTruyenApiTest {
-    @Test
-    fun testListChapters() {
-        val client = OkHttpClient()
-        val key = "T5Hr41U5jKTTrtUOXdYZnyx3wjZEKUoxv16Clwwu4D5zIbd0"
-        val storyIdInt = 15309 // Example story ID, I'll need to find a real one
-        val itemsPerPage = 10000
+class BaseScraperCacheTest {
+    private lateinit var server: MockWebServer
+    private lateinit var scraper: FakeCacheScraper
 
-        val payloadStr =
-            """{""" +
-                """"id_story":"${CryptoJS.encrypt(storyIdInt.toString(), key)}",""" +
-                """"page":"${CryptoJS.encrypt("1", key)}",""" +
-                """"items_per_page":"${CryptoJS.encrypt(itemsPerPage.toString(), key)}",""" +
-                """"order":"${CryptoJS.encrypt("asc", key)}",""" +
-                """"chapter_reading":"${CryptoJS.encrypt("", key)}"""" +
-                """}"""
-
-        val req =
-            Request
-                .Builder()
-                .url("https://www.lacatruyen.buzz/api/chapters/list-chapters")
-                .post(payloadStr.toRequestBody("application/json".toMediaType()))
-                .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
-                .header("Accept", "application/json")
-                .header("Content-Type", "application/json")
-                .header("Origin", "https://www.lacatruyen.buzz")
-                .header("Referer", "https://www.lacatruyen.buzz/story/tien-nghich")
-                .build()
-
-        val res = client.newCall(req).execute()
-        val bodyStr = res.body?.string() ?: ""
-        println("Code: ${res.code}")
-        println("Body: $bodyStr")
+    @BeforeEach
+    fun setUp() {
+        server = MockWebServer()
+        server.start()
+        scraper =
+            FakeCacheScraper(
+                client = OkHttpClient(),
+                baseUrl = server.url("/").toString().removeSuffix("/"),
+            )
     }
+
+    @AfterEach
+    fun tearDown() {
+        server.close()
+    }
+
+    @Test
+    fun `fetchDocument returns cached document within CACHE_TTL_MS without second network request`() {
+        server.enqueue(MockResponse(code = 200, body = "<html><body>Lần 1</body></html>"))
+        server.enqueue(MockResponse(code = 200, body = "<html><body>Lần 2</body></html>"))
+
+        scraper.fakeNowMs = 0L
+        val doc1 = scraper.fetch("/page")
+        assertEquals("Lần 1", doc1.body().text())
+
+        scraper.fakeNowMs = BaseScraper.CACHE_TTL_MS - 1L
+        val doc2 = scraper.fetch("/page")
+        assertEquals("Lần 1", doc2.body().text())
+        assertEquals(1, server.requestCount)
+    }
+
+    @Test
+    fun `fetchDocument evicts expired cache entry after CACHE_TTL_MS and fetches fresh document from server`() {
+        server.enqueue(MockResponse(code = 200, body = "<html><body>Lần 1</body></html>"))
+        server.enqueue(MockResponse(code = 200, body = "<html><body>Lần 2</body></html>"))
+
+        scraper.fakeNowMs = 0L
+        val doc1 = scraper.fetch("/page")
+        assertEquals("Lần 1", doc1.body().text())
+        assertEquals(1, server.requestCount)
+
+        scraper.fakeNowMs = BaseScraper.CACHE_TTL_MS + 1L
+        val doc2 = scraper.fetch("/page")
+        assertEquals("Lần 2", doc2.body().text())
+        assertEquals(2, server.requestCount)
+    }
+}
+
+internal class FakeCacheScraper(
+    client: OkHttpClient,
+    override val baseUrl: String,
+    override val useEtagCaching: Boolean = false,
+) : BaseScraper(client) {
+    var fakeNowMs: Long = 1_000_000L
+    override val sourceId: String = "fake"
+    override val sourceName: String = "Fake"
+
+    override fun nowMs(): Long = fakeNowMs
+
+    fun fetch(url: String): Document = fetchDocument(url)
+
+    override suspend fun search(
+        keyword: String,
+        completedOnly: Boolean,
+    ) = emptyList<Story>()
+
+    override suspend fun getStoryDetail(storyUrl: String): Story = throw UnsupportedOperationException()
+
+    override suspend fun getFirstPageChapters(storyUrl: String) = StorySource.FirstPageResult(emptyList(), 1)
+
+    override suspend fun getRemainingChapters(
+        storyUrl: String,
+        totalPages: Int,
+        onBatchReady: suspend (List<Chapter>) -> Unit,
+    ) {}
+
+    override suspend fun getCompletedStories(page: Int): List<Story> = emptyList()
+
+    override suspend fun getStoriesByGenre(
+        genreSlug: String,
+        page: Int,
+        minChapters: Int,
+        completedOnly: Boolean,
+    ): List<Story> = emptyList()
+
+    override suspend fun getGenreList(): List<Genre> = emptyList()
 }

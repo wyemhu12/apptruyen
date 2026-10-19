@@ -23,6 +23,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.personal.apptruyen.BuildConfig
 import com.personal.apptruyen.ui.theme.*
 import java.text.SimpleDateFormat
@@ -36,9 +37,9 @@ fun SettingsScreen(
     onNavigateToSourceLogin: (String) -> Unit = {},
     viewModel: SettingsViewModel = hiltViewModel(),
 ) {
-    val state by viewModel.state.collectAsState()
-    val backupState by viewModel.backupState.collectAsState()
-    val backupProgressText by viewModel.backupProgressText.collectAsState()
+    val state by viewModel.state.collectAsStateWithLifecycle()
+    val backupState by viewModel.backupState.collectAsStateWithLifecycle()
+    val backupProgressText by viewModel.backupProgressText.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val snackbarHostState = remember { SnackbarHostState() }
     var showImportConfirmDialog by remember { mutableStateOf(false) }
@@ -405,7 +406,7 @@ fun SettingsScreen(
                             Switch(
                                 checked = isEnabled,
                                 onCheckedChange = { viewModel.toggleSource(sourceId) },
-                                enabled = isEnabled || state.enabledSources.size < SettingsViewModel.ALL_SOURCES.size,
+                                enabled = !isEnabled || state.enabledSources.size > 1,
                             )
                         }
                     }
@@ -520,7 +521,7 @@ fun SettingsScreen(
                                     fontWeight = FontWeight.SemiBold,
                                 )
                                 Text(
-                                    "Xem thời gian đọc, streak, biểu đồ",
+                                    "Xem thời gian đọc, chuỗi ngày, biểu đồ",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
@@ -649,7 +650,7 @@ fun SettingsScreen(
 
             // ── Nhật ký lỗi ──
             item {
-                val crashLogs by viewModel.crashLogs.collectAsState()
+                val crashLogs by viewModel.crashLogs.collectAsStateWithLifecycle()
                 var selectedCrashLog by remember {
                     mutableStateOf<com.personal.apptruyen.util.CrashHandler.CrashLog?>(
                         null,
@@ -714,7 +715,7 @@ fun SettingsScreen(
                             val dateStr =
                                 SimpleDateFormat(
                                     "dd/MM HH:mm:ss",
-                                    Locale.getDefault(),
+                                    Locale.ROOT,
                                 ).format(Date(log.timestamp))
                             val firstLine =
                                 log.content
@@ -775,15 +776,15 @@ fun SettingsScreen(
                     )
                 }
 
-                if (selectedCrashLog != null) {
+                selectedCrashLog?.let { crashLog ->
                     AlertDialog(
                         onDismissRequest = { selectedCrashLog = null },
                         title = {
                             Text(
                                 "Lỗi lúc ${SimpleDateFormat(
                                     "dd/MM/yyyy HH:mm",
-                                    Locale.getDefault(),
-                                ).format(Date(selectedCrashLog!!.timestamp))}",
+                                    Locale.ROOT,
+                                ).format(Date(crashLog.timestamp))}",
                                 style = MaterialTheme.typography.titleSmall,
                             )
                         },
@@ -795,7 +796,7 @@ fun SettingsScreen(
                             ) {
                                 val scrollState = rememberScrollState()
                                 Text(
-                                    selectedCrashLog!!.content,
+                                    crashLog.content,
                                     style =
                                         MaterialTheme.typography.bodySmall.copy(
                                             fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
@@ -817,7 +818,7 @@ fun SettingsScreen(
                                 val clip =
                                     android.content.ClipData.newPlainText(
                                         "crash_log",
-                                        selectedCrashLog!!.content,
+                                        crashLog.content,
                                     )
                                 clipboard.setPrimaryClip(clip)
                                 selectedCrashLog = null
@@ -883,7 +884,7 @@ fun SettingsScreen(
                                 color = Color.White.copy(alpha = 0.85f),
                             )
                             Text(
-                                "Đa nguồn: TruyenCom • TàngThưViện • SsTruyện • TruyenFull",
+                                "Đa nguồn: Tàng Thư Viện • SsTruyện • Wikidich",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = Color.White.copy(alpha = 0.7f),
                             )

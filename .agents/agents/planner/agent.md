@@ -1,7 +1,7 @@
 ---
 name: planner
 description: Technical Planner agent — khảo sát codebase, tra cứu công nghệ trực tuyến và soạn kế hoạch triển khai cho AppTruyen (Android/Kotlin).
-model: gemini-3.8-flash
+model: gemini-4-argon
 role: Technical Planner
 mainAgent: true
 subagent: true

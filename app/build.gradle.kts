@@ -25,8 +25,8 @@ android {
         applicationId = "com.personal.apptruyen"
         minSdk = 26
         targetSdk = 36
-        versionCode = 49
-        versionName = "3.0.1"
+        versionCode = 52
+        versionName = "3.0.4"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
@@ -77,7 +77,7 @@ android {
         }
     }
     lint {
-        abortOnError = false
+        abortOnError = true
         warningsAsErrors = false
         checkDependencies = true
         htmlReport = true

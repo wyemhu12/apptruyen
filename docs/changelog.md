@@ -6,6 +6,142 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 
 ## [Unreleased]
 
+## [3.0.4] - 2026-10-19 (versionCode 52)
+
+### Fix bug
+
+- **Khắc phục toàn diện Audit Phase 4 — Kiểm thử, Build/Lint/ProGuard, Cookie/Cache, Khóa Cleartext HTTP & Đồng bộ Tài liệu (2026-10-19)**:
+  - **Bổ sung `TangThuVienScraperTest` & Xóa bỏ Mirror Tests (`[CRIT-17]`, `[CRIT-18]`)**:
+    - Thêm `customBaseUrl: String? = null` vào `TangThuVienScraper`, dùng `$baseUrl` ở toàn bộ 10 điểm xây dựng URL, giải mã `contains("/_next/image?url=")` kết hợp `validateCoverUrl`, và sửa `extractSlug` khi URL không có `/doc-truyen/`. Tạo mới `TangThuVienScraperTest.kt` (5 `@Test` với `MockWebServer`).
+    - Xóa toàn bộ hàm mirror `private fun splitIntoParagraphs` trong `TtsManagerTest.kt` (thêm guard `if (text.isBlank()) return emptyList()` vào `TtsManager.splitIntoParagraphs`), xóa 2 hàm mirror trong `NavigationUtilsTest.kt`, và bổ sung 2 test gọi trực tiếp `StoryDetailViewModel.onCleared()` trong `StoryDetailViewModelTest.kt`.
+  - **Dọn dẹp mã chết `CryptoJS.kt` & Chuẩn hóa `CookieTest`, `LacaTruyenApiTest`, `TestJsoup` (`[HIGH-21]`, `[MED-12]`, `[LOW-04]`)**:
+    - Xóa `app/src/main/java/com/personal/apptruyen/data/remote/CryptoJS.kt`.
+    - Viết lại `CookieTest.kt` (2 `@Test` kiểm chứng `AndroidCookieStore.removeCookies`), `LacaTruyenApiTest.kt` (`BaseScraperCacheTest` kiểm chứng Cache TTL 10 phút với `MockWebServer`), và `TestJsoup.java` (offline HTML fixture, 0 cuộc gọi mạng thật).
+  - **Bật cổng chất lượng Android Lint `abortOnError = true` & Tinh chỉnh R8/ProGuard (`[HIGH-20]`, `[MED-10]`, `[MED-11]`)**:
+    - Thêm `app/lint.xml` (`<issue id="PropertyEscape" severity="ignore" />`), đổi `abortOnError = true` trong `app/build.gradle.kts`, sửa `LocalContext.current as? Activity` sang `LocalActivity.current` trong `ReaderScreen.kt`, và truyền `Locale.ROOT` vào `String.format` trong `SettingsScreen.kt` (xác minh qua Negative/Positive Probe `.\gradlew.bat lintDebug`).
+    - Thu hẹp rule Jsoup (`org.jsoup.nodes.**`, `org.jsoup.parser.**`, `org.jsoup.select.**`) và đổi rule `@Serializable` sang `-keep @kotlinx.serialization.Serializable class com.personal.apptruyen.data.model.** { *; }` trong `app/proguard-rules.pro`.
+  - **Hoàn thiện `AndroidCookieStore.removeCookies`, `BaseScraper` Cache TTL 10 phút, Khóa Cleartext HTTP & Đồng bộ `Timber` (`[HIGH-22]`, `[MED-13]`, `[MED-14]`, `[LOW-02]`, `[LOW-03]`)**:
+    - Chuẩn hóa `normalizedUrl`, xóa cả cookie host-only lẫn `Domain=.$domain` khi `cookieNames.isEmpty()` và gọi `cookieManager.flush()` trong `AndroidCookieStore.removeCookies`.
+    - Bổ sung `CACHE_TTL_MS = 10 * 60 * 1000L` và `protected open fun nowMs(): Long` trong `BaseScraper.kt` để tự động hết hạn cache RAM sau 10 phút.
+    - Đặt `android:usesCleartextTraffic="false"` trong `AndroidManifest.xml`, tự động nâng cấp `http://` → `https://` tại `BaseScraper.validateCoverUrl`, `WikidichScraper.fixUrl`, `StoryRepository.upgradeToHttps`, và dùng chung `internal fun StoryEntity.toDomain(): Story`.
+    - Thay thế toàn bộ `android.util.Log` bằng `Timber` trên 8 file source và ẩn `${e.message}` thô trong `TangThuVienScraper.kt`.
+  - **Đồng bộ Tài liệu & Quản trị (`[HIGH-23]`, `[MED-15]`, `[LOW-05]`)**: Cập nhật toàn diện `AGENTS.md`, `.agents/rules/04-scraping.md`, `.agents/agents/reviewer/mental-simulation.md`, `docs/scraping_lacatruyen_decryption.md`, `docs/architecture.md`, `docs/scraping.md`, `docs/contributing.md`, `docs/progress.md`, `docs/changelog.md`, `docs/lessons-learned.md`.
+
+- **Khắc phục toàn diện Audit Phase 3 — Màn hình chính, Điều hướng, Bảo mật WebView, TTS và Hệ thống (2026-10-19)**:
+  - **Biểu đồ 7 ngày động & chống kẹt bộ lọc `"Chưa xong"` trên Trang chủ (`HomeViewModel.kt`, `HomeScreen.kt` — `[CRIT-13]`, `[HIGH-12]`)**:
+    - Tính nhãn thứ động (`T2`..`T7`, `CN`) theo `Calendar.DAY_OF_WEEK` cho cửa sổ 7 ngày trượt (`DayChapterStat(label, chapters, isToday)`), đồng thời lắng nghe `readingStatsRepository.observeAllStats()` kết hợp `getReadingStreak()` để tự động cập nhật ngay khi đọc xong.
+    - Tách điều kiện hiển thị phần `"Đang đọc gần đây"` theo `hasReadingHistory: StateFlow<Boolean>` để luôn giữ hàng `FilterChip` (`Gần đây` / `A → Z` / `Chưa xong`) kèm thông báo tiếng Việt khi bộ lọc `"Chưa xong"` trả về rỗng.
+  - **Bảo vệ công tắc nguồn cuối cùng, lọc nguồn cũ & đồng bộ đăng nhập Wikidich (`SettingsViewModel.kt`, `SettingsScreen.kt` — `[CRIT-14]`, `[HIGH-17]`, `[MED-09]`, `[LOW-01]`)**:
+    - Sửa điều kiện `Switch(enabled = !isEnabled || state.enabledSources.size > 1)` trong `SettingsScreen.kt` để không thể tắt nguồn truyện cuối cùng đang hoạt động.
+    - Chuẩn hóa `enabledSources` bằng `.intersect(ALL_SOURCES).ifEmpty { ALL_SOURCES }` trong `SettingsViewModel.kt` để tự động fallback về 3 nguồn hiện hành khi gặp dữ liệu sao lưu chứa nguồn cũ (`truyencom`, `truyenfull`).
+    - Lắng nghe trực tiếp `authRepository.getAuthState(SourceIds.WIKIDICH)` trong `SettingsViewModel.init`, loại bỏ 3 toán tử `!!` ở `selectedCrashLog`, đổi `"streak"` → `"chuỗi ngày"` và cập nhật dòng giới thiệu `"Đa nguồn: Tàng Thư Viện • SsTruyện • Wikidich"`.
+  - **Chặn vòng lặp `loadMore()` vô tận, lọc độc lập theo số chương/trạng thái & tách trạng thái Empty/Error (`ExploreViewModel.kt`, `SearchViewModel.kt`, `DownloadsViewModel.kt`, `DownloadsScreen.kt` — `[CRIT-15]`, `[HIGH-13]`, `[HIGH-19]`)**:
+    - Trong `ExploreViewModel.loadMore()` và `SearchViewModel.loadMoreFilterResults()`: chỉ giữ `canLoadMore = true` khi `merged.size > currentStories.size` và đặt `canLoadMore = false` khi gặp lỗi mạng hoặc kết quả trùng lặp.
+    - Bổ sung `SearchViewModel.browseByFilterOnly(chapterFilter)` khi người dùng lọc theo số chương hoặc tắt `"Chỉ truyện Full"` mà không chọn thể loại hay nhập từ khóa; đặt `error = null` khi kết quả rỗng để hiển thị đúng Empty State thay vì Error Card.
+    - Bổ sung `errorMessage: StateFlow<String?>`, `clearError()` và `SnackbarHost` tiếng Việt khi xóa truyện tải thất bại trên `DownloadsViewModel` / `DownloadsScreen`.
+  - **Mã hóa/giải mã an toàn tham số điều hướng (`NavigationUtils.kt`, `AppNavigation.kt`, `StoryDetailViewModel.kt`, `ReaderViewModel.kt` — `[CRIT-16]`)**:
+    - Dùng `java.util.Base64` (URL-safe, không padding), sentinel `"_"` cho chuỗi rỗng, và thêm `encodeRouteParam` / `decodeRouteParam` (tiền tố `"b64_"`) cho `storyId` và `query` trong `Screen.Search`, `Screen.StoryDetail`, `Screen.Reader`.
+  - **Bảo mật tên miền & dọn dẹp `WebView`, chuẩn hóa retry `WikidichScraper`, và bảo vệ `CrashHandler` (`WebViewContentLoader.kt`, `SourceLoginScreen.kt`, `BaseScraper.kt`, `WikidichScraper.kt`, `CrashHandler.kt` — `[HIGH-07]`, `[HIGH-08]`, `[HIGH-09]`)**:
+    - Bổ sung `WebViewContentLoader.isAllowedDomain(host, allowedDomains)` kiểm tra khớp chính xác hoặc subdomain có dấu chấm (`.domain`), kiểm tra `scheme` (`https`/`http`) trên `SourceLoginScreen`, và dọn dẹp `WebView` (`stopLoading()` + `destroy()`) trong khối `finally` trên `mainHandler`.
+    - Thêm `BaseScraper.isRetryableScraperException` (chỉ retry lỗi mạng/timeout/HTTP 429/5xx, không retry 4xx vĩnh viễn hay `ParseException`) và chuyển cả 9 điểm gọi mạng trong `WikidichScraper` sang `fetchDocumentWithRetry` (kèm retry trong `fetchAjaxFragment`).
+    - Bắt `catch (t: Throwable)` và luôn chuyển tiếp `defaultHandler?.uncaughtException(thread, throwable)` trong khối `finally` của `CrashHandler`.
+  - **Đồng bộ UI Tiếng Việt 100%, Lifecycle, WindowInsets, Adaptive Layout & TTS (`[HIGH-11]`, `[HIGH-16]`, `[HIGH-18]`, `[MED-05]`, `[MED-06]`, `[MED-07]`, `[LOW-01]`)**:
+    - Việt hóa 100% thông báo lỗi trong `ScraperException.kt` và các ViewModels; đổi `"Streak"` → `"Chuỗi ngày"` trên `ReadingStatsScreen.kt`.
+    - Đồng bộ `ShimmerEffect.kt` theo `MaterialTheme.colorScheme`; chuyển toàn bộ các màn hình sang `collectAsStateWithLifecycle()`; cấu hình `contentWindowInsets = WindowInsets(0, 0, 0, 0)` + `.consumeWindowInsets(padding)` trên `AppNavigation.kt`, `.imePadding()` trên `SearchScreen.kt`, `.safeDrawingPadding()` trên `ChapterListPanel.kt`, `GridCells.Adaptive(minSize = 150.dp)` trên `ExploreScreen.kt`, và giảm delay `SplashScreen.kt` xuống `800ms`.
+    - Lưu `pendingSpeed` trước khi TTS khởi tạo xong trong `TtsService.kt`; bỏ `startService` tự động khi `TtsManager` khởi tạo, chỉ khởi chạy và kết nối dịch vụ khi bấm `play()` / `seekAndPlay()` kèm hàng đợi `pendingPlay` / `pendingSeekAndPlayIndex`.
+  - **Kiểm thử**: Bổ sung 14 unit tests mới (`HomeViewModelTest`, `SettingsViewModelTest`, `ExploreViewModelTest`, `SearchViewModelTest`, `DownloadsViewModelTest`, `NavigationUtilsTest`, `WebViewContentLoaderTest`, `WikidichScraperTest`, `CrashHandlerTest`, `TtsManagerTest`).
+
+- **Khắc phục toàn diện Audit Phase 2 — Trải nghiệm Đọc truyện, Chi tiết truyện & Định dạng Văn bản (2026-10-19)**:
+  - **Khôi phục & bảo toàn vị trí cuộn đoạn văn (`ReaderViewModel.kt`, `ReaderScreen.kt` — `[CRIT-09]`)**:
+    - Trong `ReaderViewModel.loadChapter`: khôi phục `initialScrollIndex = savedProgress.scrollPosition` khi mở lại đúng chương đang đọc dở (`savedProgress.lastChapterNumber == number && savedProgress.scrollPosition > 0`) và bảo toàn `currentScrollPosition` khi lưu `ReadingProgress` cũng như trong `onCleared()` (không ghi đè về `0`).
+    - Trong `ReaderScreen`: gộp việc cuộn `listState.scrollToItem(state.initialScrollIndex)` và `snapshotFlow { listState.firstVisibleItemIndex }` vào một `LaunchedEffect(state.currentChapterNumber, state.isLoading)` duy nhất, đảm bảo khôi phục vị trí cuộn đồng bộ trước khi bắt đầu lắng nghe thay đổi cuộn của người dùng.
+  - **Giữ độ sáng màn hình tùy chỉnh trong suốt phiên đọc (`ReaderScreen.kt` — `[CRIT-10]`)**:
+    - Đưa state `brightness` (`rememberSaveable`), `LaunchedEffect(currentActivity, brightness)` và `DisposableEffect(currentActivity)` khôi phục `screenBrightness = -1f` ra cấp gốc của `ReaderScreen` (bên ngoài `AnimatedVisibility(visible = state.showSettings)`), khắc phục lỗi mất độ sáng ngay khi đóng bảng cài đặt.
+  - **Chặn crash `IllegalArgumentException` ở `DownloadRangeDialog` khi `totalChapters == 0` (`StoryDetailScreen.kt` — `[CRIT-11]`, `[MED-04]`)**:
+    - Vô hiệu hóa nút `"Tải khoảng"` và `"Tải tất cả"` khi `state.chapters.isEmpty()`; dùng `safeMaxChapters = totalChapters.coerceAtLeast(1)`, bàn phím số `KeyboardType.Number` và kiểm tra `isValidRange` trước khi cho phép bấm `"Tải xuống"`.
+  - **Chống Race Condition chuyển chương, đồng bộ cài đặt khởi tạo & xử lý văn bản trên `Dispatchers.Default` (`ReaderViewModel.kt` — `[CRIT-12]`, `[MED-03]`)**:
+    - Hủy `loadChapterJob?.cancel()` trước mỗi lượt tải chương mới; dùng `CompletableDeferred<Unit>` (`settingsLoadedDeferred`) đảm bảo `loadDefaultSettings()` nạp xong từ thay thế và `prefetchCount` trước khi xử lý chương đầu tiên.
+    - Giữ văn bản thô trong `contentCache` và chạy `processRawChapterContent` (`TextFormatHelper.formatChapter` + `TextReplacementHelper.applyAllReplacements` + `splitIntoParagraphs`) trên `Dispatchers.Default`; khi bật/tắt format hoặc thay chữ, gọi `reprocessCurrentChapter()` tái xử lý ngay từ cache thô mà không gọi mạng lại và không mất vị trí cuộn.
+  - **Thống kê thời gian đọc & số chương đã đọc chính xác (`ReaderViewModel.kt`, `ReaderScreen.kt` — `[HIGH-10]`)**:
+    - Gắn `LifecycleEventObserver` (`ON_RESUME` / `ON_PAUSE`) trên `ReaderScreen` gọi `flushReadingSession()` khi ẩn ứng dụng hoặc tắt màn hình, loại trừ thời gian ở background khỏi `reading_stats`; gọi `recordChapterReadOnTransition` nhất quán trên cả 6 luồng chuyển chương (`nextChapter`, `prevChapter`, `loadNextChapterOnScroll`, `loadPrevChapterOnScroll`, `navigateToChapter`, `autoNextChapter`).
+  - **Hoàn thiện UX/UI Đọc truyện, Chi tiết truyện & `TextFormatHelper` (`[HIGH-14]`, `[HIGH-15]`, `[HIGH-16]`, `[MED-01]`, `[MED-02]`, `[MED-04]`, `[MED-08]`)**:
+    - Cập nhật ngay `customReplacements` trong bộ nhớ, tái xử lý chương hiện tại và hiển thị `Snackbar` tiếng Việt khi gửi từ thay thế sang cài đặt chung (`[HIGH-14]`).
+    - Bổ sung `.verticalScroll(rememberScrollState())` cho `PokemonLookupDialog` khi xoay ngang màn hình (`[HIGH-15]`).
+    - Chuẩn hóa bảng màu độc lập cho 3 chế độ `LIGHT`, `DARK`, `SEPIA` trong `ReaderThemeColors.kt` đạt chuẩn tương phản WCAG AA (`> 4.5:1`) bất kể chế độ hệ thống (`[HIGH-16]`).
+    - Cố định `contentPadding` (`top = 64.dp, bottom = 140.dp`) của `LazyColumn` trong `ReaderScreen` để chữ không bị giật 64dp khi ẩn/hiện thanh công cụ (`[MED-01]`); bọc `SelectionContainer` quanh `LazyColumn` khi bật Chế độ Copy và tự động dừng `AutoScroll` khi chạm đáy chương (`[MED-02]`).
+    - Thêm ô tìm kiếm chương trong `ChapterListPanel.kt`, hiển thị nút `"Tiếp tục đọc (Chương X)"` kèm `resolveChapterUrlForReading` và ưu tiên `cached.url` trong `StoryRepository.getChapterContent` (`[MED-04]`).
+    - Pre-compile toàn bộ `Regex` thành hằng số trong `TextFormatHelper.kt`, mask `URL_OR_DOMAIN_REGEX` và dùng negative lookbehind `(?<!\p{N}[.,:])\p{N}` để bảo vệ số thập phân/hàng nghìn (`3.14`, `1.000`, `1,5`), giờ/tỷ số (`12:30`, `3:2`) và URL/tên miền (`[MED-08]`).
+  - **Kiểm thử**: Bổ sung 14 unit tests mới trong `ReaderViewModelTest`, `StoryDetailViewModelTest` và `TextFormatHelperTest`.
+
+- **Khắc phục toàn diện Audit Phase 1 — Toàn vẹn Dữ liệu, Sao lưu/Khôi phục, Dịch vụ nền, TTS và Coroutines (2026-10-16)**:
+  - **Sao lưu & Khôi phục (`BackupRepository.kt`, `BackupData.kt`, `SettingsDataStore.kt`, `SettingsViewModel.kt` — `[CRIT-02]`, `[CRIT-03]`, `[HIGH-03]`, `[HIGH-05]`)**:
+    - Chống `OutOfMemoryError` khi xuất/nhập bản sao lưu lớn: loại bỏ `contentMap` lưu toàn bộ văn bản chương trong RAM; `exportBackup` đặt `prettyPrint = false`, tuần tự hóa `metadata.json` trực tiếp ra stream (`encodeToStream` qua `CountingNonClosingOutputStream`) và đọc nội dung chương theo phân trang 50 chương/lần (`getDownloadedChaptersWithContentPaged`).
+    - Thiết kế lại `importBackup` theo kiến trúc **2 Pha**:
+      * *Pha 1 (Ngoài DB Transaction)*: Spool ZIP từ SAF `InputStream` ra `tempZipFile`, kiểm tra đường dẫn (`CHAPTER_ENTRY_REGEX`), chống Zip Bomb (`MAX_METADATA_ENTRY_BYTES = 100 MB`, `MAX_CHAPTER_ENTRY_BYTES = 5 MB`, `MAX_TOTAL_UNCOMPRESSED_BYTES = 2 GB`, `MAX_ZIP_ENTRIES = 500_000`), và giải mã `metadata.json` bằng `decodeFromStream` qua `BoundedNonClosingInputStream`.
+      * *Pha 2a (Metadata Transaction)*: Bọc trong `DatabaseTransactionRunner.withWriteTransaction`; dùng `storyDao.insertStoryIgnore` + `updateStory` thay vì `@Upsert` để không kích hoạt `ON DELETE CASCADE` làm mất các chương đã tải trên máy, hợp nhất `isInLibrary`/`addedTimestamp`/`storyReplacementsEnabled`/`storyCustomReplacements` và giữ bản ghi `readingProgress` có `lastReadTimestamp` mới hơn.
+      * *Pha 2b (Streaming Chapter Batches)*: Quét lần 2 qua `tempZipFile` và ghi văn bản chương theo từng lô giới hạn kép (`<= 50` chương và `<= 8 MB`/transaction) qua `chapterDao.restoreChapterContentIfEmpty` để không ghi đè nội dung chương đã tải sẵn trên máy và không giữ khóa ghi SQLite quá lâu.
+    - Khắc phục lỗi `ClassCastException` trên `SettingsDataStore`: bổ sung `SettingsKeys.restoreSettingFromBackup` khôi phục đúng kiểu dữ liệu từng khóa (`AUTO_SCROLL_SPEED` là `Int` thay vì bị đoán nhầm thành `Float` do chứa chuỗi `"speed"`), kèm cơ chế tự phục hồi `DataStore<Preferences>.healCorruptedIntPreferences()` và `Preferences.getIntSafe(...)`.
+    - Bổ sung `storyReplacementsEnabled` và `storyCustomReplacements` vào `StoryBackup` (`BackupData.kt`); bọc `CrashHandler.getCrashLogs`/`clearCrashLogs` trong `withContext(Dispatchers.IO)` và ẩn thông báo ngoại lệ tiếng Anh thô qua `SettingsViewModel.mapBackupErrorMessage`.
+  - **Tính chuỗi ngày đọc liên tiếp (`ReadingStatsRepository.kt` — `[CRIT-04]`)**:
+    - Sửa lỗi lệch chỉ số vòng lặp trong `getReadingStreak()` từng trả về `0` khi hôm nay chưa có bản ghi đọc dù hôm qua vẫn đọc bình thường; tra cứu ngày theo `recent.associateBy { it.date }` và tính ngày có hoạt động khi `totalReadingTimeMs > 0L || chaptersRead > 0` (`isActiveDay()`).
+  - **Chiếu nhẹ `ChapterDao`, Gộp giao dịch `mergeAndInsertChapters` & Bảo vệ Metadata (`ChapterDao.kt`, `StoryRepository.kt`, `DownloadRepository.kt` — `[CRIT-05]`, `[HIGH-01]`, `[HIGH-02]`, `[HIGH-04]`)**:
+    - Chuyển 5 truy vấn danh sách chương (`getChaptersByStory`, `getChaptersByStoryOnce`, `getDownloadedChapters`, `getChaptersPaged`, `getChaptersByNumbers`) sang chiếu nhẹ `SELECT storyId, chapterNumber, title, url, NULL AS content, isDownloaded, downloadedTimestamp FROM chapters ...` để tránh kéo hàng chục MB văn bản chương vào bộ nhớ mỗi khi Room phát Flow hoặc vượt ngưỡng `CursorWindow` 2 MB.
+    - Bọc `StoryRepository.mergeAndInsertChapters` trong `transactionRunner.withWriteTransaction` và chỉ gọi `updateChapterMetadata` khi `title` hoặc `url` thực sự thay đổi.
+    - Mở rộng `ChapterDao.saveChapterContent` nhận thêm `title` và `url` (kèm điều kiện `CASE WHEN TRIM(title) = '' ...` trong `updateChapterContent`) để không rơi về tiêu đề mặc định `"Chương X"` khi tải chương trước khi đồng bộ danh sách; tách rõ `DownloadProgress.current` (số chương tải thành công) và `DownloadProgress.processed` (`current + errors`).
+    - Bổ sung `resolveSafeCoverUrl` và `resolveSafeTotalChapters` để chặn ảnh `data:`/`base64` và không ghi đè `totalChapters = 0` trong cả `getStoryDetail`, `refreshLibraryStories` và `snapshotStoryMetadata`.
+  - **Vòng đời Foreground Service & Timeout Android 14–16 (`DownloadService.kt` — `[CRIT-06]`, `[CRIT-07]`)**:
+    - Chống hủy nhầm lượt tải mới: quản lý `activeDownloadToken` và `lastStartId` trên Main thread; khối `finally` của job bị hủy chỉ dừng service qua `stopSelfResult(stopId)` khi `activeDownloadToken == jobToken`.
+    - Bọc `ContextCompat.startForegroundService` trong `try/catch` (`DownloadService.startDownload(): Boolean`), gọi `stopSelf()` ngay nếu `ServiceCompat.startForeground` ném ngoại lệ, và override `onTimeout(startId: Int, fgsType: Int)` (Android 15/16 `dataSync` timeout) để hủy job tải, thông báo tiếng Việt rõ ràng (`buildCompletionText(..., timedOut = true)`) và dừng service an toàn.
+  - **Đồng bộ `TtsService` & `TtsPlaybackStateMachine` (`TtsService.kt`, `TtsPlaybackStateMachine.kt` — `[HIGH-06]`)**:
+    - Kiểm tra `TtsPlaybackStateMachine.shouldProcessUtteranceDone(utteranceId, currentIndex, _state.value.isPlaying)` ở đầu `UtteranceProgressListener.onDone` để chặn callback `onDone` trễ sau khi `tts.stop()` hoặc Pause.
+    - Giải phóng `stopSilentAudio()`, `releaseWakeLock()`, `abandonAudioFocus()` trong `UtteranceProgressListener.onError`; ủy quyền `nextParagraph()` và `prevParagraph()` sang `seekAndPlay(targetIndex)` khi đang phát hoặc tạm dừng để luôn kích hoạt đầy đủ `stateMachine.onPlayRequested()`, `WakeLock`, `AudioFocus` và `silentPlayer`.
+  - **Bảo toàn Cooperative Cancellation (`[CRIT-08]`)**:
+    - Ném lại `CancellationException` trong `Exception.toScraperException()`, `ScraperCircuitBreaker.execute()`, `BaseScraper`, `TangThuVienScraper`, `StoryRepository`, và toàn bộ 6 ViewModels (`ExploreViewModel`, `SearchViewModel`, `ReaderViewModel`, `StoryDetailViewModel`, `HomeViewModel`, `SettingsViewModel`).
+  - **Kiểm thử**: Bổ sung 21 unit tests mới (`BackupRepositoryTest`, `ReadingStatsRepositoryTest`, `StoryRepositoryTest`, `DownloadRepositoryTest`, `DownloadServiceTest`, `ScraperCircuitBreakerTest`, `SettingsViewModelTest`, `TtsPlaybackStateTest`) và 1 instrumented test (`BackupRestoreCascadeTest`).
+
+### Sửa đổi
+
+- **Đồng bộ hệ thống quản trị Agent (`.agents/`) từ dự án Vikini (2026-10-16)**:
+  - **Siết chuẩn thẩm định độc lập của `@reviewer` và Claude CLI Reviewer** (`.agents/agents/reviewer/agent.md`, `.agents/agents/reviewer/evidence-bar.md`, `.agents/scripts/claude-reviewer-prompt.md`):
+    - Định vị rõ nhiệm vụ của Reviewer là **tìm lỗi**, không kế thừa kết luận của Audit Run trước.
+    - Bắt buộc phân loại trạng thái lỗi cũ theo 3 mức `ĐÃ SỬA` / `SỬA MỘT PHẦN` / `CHƯA SỬA` kèm bằng chứng `[SRC]` trên code thật hoặc `[CMD]` (việc plan chỉ viết lại đoạn mô tả là chưa đủ).
+    - Bổ sung 4 quy tắc bằng chứng: `[SRC]` chỉ trỏ vào code/schema/config thật (không tính `docs/plans/`), trích dẫn plan chỉ tính là `UNVERIFIED`, probe phải chạm code thật của dự án, và bắt buộc `view_file` đối chiếu từng file `[MODIFY]` với code hiện tại.
+    - Khi cấp phê duyệt mà mục **Phát Hiện Mới** không có lỗi nào (kể cả `[MINOR]`), bắt buộc có mục **Các Tấn Công Đã Thử (Attempted Attack Vectors)** với tối thiểu 3 kịch bản phản biện cụ thể kèm dẫn chứng `[SRC]`/`[CMD]`; mở rộng danh sách từ ngữ tuyệt đối bị cấm (*100%*, *triệt để*, *hoàn hảo*, *tuyệt đối*, *xuất sắc*, *mẫu mực*, *chuẩn công nghiệp*, *toàn diện*, *tuyệt vời*).
+    - Loại bỏ dấu nháy kép trong `claude-reviewer-prompt.md` để pass tuyệt đối bài kiểm thử `H7` trong `code-freeze-guard.test.js`.
+  - **Nâng cấp Subagents & Model Routing lên `gemini-4-argon` theo kiến trúc Orchestrator–Worker Split** (`.agents/agents/planner/agent.md`, `.agents/agents/reviewer/agent.md`, `.agents/agents/qa/agent.md`, `.agents/rules/01-coding.md`, `.agents/rules/05-plan-review.md`, `.agents/README.md`):
+    - Nâng cấp model mặc định của `@planner` và `@reviewer` (fallback) cùng model fallback khi hết quota của `@qa` từ `gemini-3.8-flash` lên `gemini-4-argon` (thinking budget tối đa High/Max).
+    - Cập nhật bảng **Ma Trận Phân Bổ Tác Vụ Sang Model Tier** và **Nguyên Tắc Orchestrator–Worker Split & Nhận Thức Chi Phí** trong `.agents/README.md`.
+  - **Bổ sung workflow `/audit`** (`.agents/workflows/audit.md`, `.agents/rules/02-quality.md`): quy trình rà soát nhanh chất lượng code cho một file hoặc cụm tính năng theo chuẩn Clean Architecture + MVVM/MVI, Kotlin/Compose và UI 100% tiếng Việt của AppTruyen.
+
+## [v3.0.3] - 2026-10-16
+
+### Thêm mới
+
+- **Vượt chặn DNS trên mạng WiFi công ty bằng DNS-over-HTTPS (`ResilientDohDns`)**:
+  - Xây dựng bộ phân giải `ResilientDohDns` (`okhttp3.Dns`) kết nối qua HTTPS cổng 443 tới Cloudflare DoH (`https://1.1.1.1/dns-query`, `https://1.0.0.1/dns-query`) và Google DoH (`https://8.8.8.8/resolve`) ở định dạng `application/dns-json`, gắn trực tiếp vào `OkHttpClient` dùng chung (`di/AppModule.kt`) mà không cần thêm thư viện ngoài.
+  - Tự động lọc bỏ các địa chỉ IP sinkhole/bogon (`0.0.0.0`, `127.0.0.1`, LAN nội bộ...) do tường lửa mạng doanh nghiệp trả về khi chặn tên miền đọc truyện (`wikicv.org`, `sstruyen.pics`, `api.sstruyen.pics`, `file.sstruyen.pics`, `tangthuvien.org`).
+  - Bảo toàn `hostname` gốc qua `InetAddress.getByAddress(hostname, rawBytes)` để TLS SNI hoạt động chính xác với Cloudflare, lưu cache kết quả phân giải trong 10 phút (`DEFAULT_CACHE_TTL_MS`), bỏ qua `localhost`/IP literal cho `MockWebServer`, và tự động fallback sang `Dns.SYSTEM` nếu mọi máy chủ DoH đều không phản hồi.
+  - Bổ sung bộ unit test `ResilientDohDnsTest.kt` (5 tests).
+
+### Sửa đổi
+
+- **Điều tiết tốc độ tải chương riêng cho nguồn Wikidich (`wikicv.org`) chống khóa IP Cloudflare**:
+  - Trong `DownloadRepository.downloadChapters`: tự động phân biệt nguồn `wikidich` (`WIKIDICH_SOURCE_ID = "wikidich"`) để tải tuần tự từng chương một (`WIKIDICH_BATCH_SIZE = 1`) kèm thời gian nghỉ ngẫu nhiên **`15–20 giây/chương`** (`WIKIDICH_MIN_DELAY_MS = 15_000L`, `WIKIDICH_MAX_DELAY_MS = 20_000L`), trong khi giữ nguyên 100% tốc độ tải song song 4 chương/lô (`250ms`/lô) cho các nguồn khác (`sstruyen`, `tangthuvien`).
+  - Bổ sung cơ chế **Fail-Fast chống khóa IP**: khi gặp `ScraperException.HttpException` với mã `403`, `429` hoặc `503` từ Wikidich/Cloudflare, dừng ngay lập tức mà không retry vô ích, đồng thời tăng thời gian chờ retry cho các lỗi mạng tạm thời khác trên Wikidich lên `5_000ms` (`WIKIDICH_RETRY_DELAY_MS`).
+  - Trong `WikidichScraper.getRemainingChapters`: bổ sung `delay(crawlDelayMs)` (`300ms`) giữa các trang phân trang AJAX `/book/index`.
+  - Trong `DownloadService`: thiết lập `WakeLock` ở chế độ `setReferenceCounted(false)` và tự động gia hạn (`renewWakeLock()`) sau mỗi chương tải xong để không bị hết hạn giữa chừng khi tải các bộ truyện dài trên Wikidich; hiển thị thông báo tiếng Việt rõ ràng khi dừng tải do giới hạn tốc độ của Cloudflare (`buildCompletionText(..., rateLimited = true)`).
+  - Bổ sung 4 unit tests trong `DownloadRepositoryTest.kt`, 1 unit test trong `DownloadServiceTest.kt` và 1 unit test trong `WikidichScraperTest.kt`.
+
+## [v3.0.2] - 2026-10-15
+
+### Fix bug
+
+- **Khắc phục lỗi lệch chuẩn `Story.id` làm hỏng chế độ Offline của Wikidich và gây ghi đè dữ liệu giữa Tàng Thư Viện & SsTruyện (`[CRIT-01]`)**:
+  - Chuẩn hóa `Story.id` và `Chapter.storyId` theo định dạng `"${sourceId}_$slug"` đồng nhất trên `TangThuVienScraper`, `SsTruyenScraper` và `WikidichScraper`, ngăn chặn triệt để việc hai nguồn có chung `slug` (như `"pham-nhan-tu-tien"`) ghi đè `sourceId`, `url` và danh sách chương của nhau trong Room DB.
+  - Bổ sung truy vấn `StoryDao.getStoryByUrl(url)` và hàm `StoryRepository.findCachedStory(storyUrl)` kết hợp sinh `storyId` chuẩn theo `sourceFor(storyUrl)` trước khi tra cứu Room, giúp mở trang chi tiết truyện Wikidich đã tải khi mất mạng hoạt động tức thì từ cache.
+  - Bảo toàn tương thích ngược 100% cho các truyện đã tải ở phiên bản cũ (lưu với `id = slug` trần): tự động nhận diện qua URL hoặc fallback `rawSlug` cùng `sourceId` và giữ nguyên khóa chính `id` hiện có khi làm mới metadata (`getStoryDetail`, `refreshLibraryStories`, `mergeAndInsertChapters`, `DownloadRepository.snapshotStoryMetadata`, `StoryDetailViewModel`).
+  - Cập nhật `SsTruyenScraperTest.kt` và bổ sung 2 unit tests mới trong `StoryRepositoryTest.kt`.
+
 ## [v3.0.1] - 2026-10-15
 
 ### Fix bug

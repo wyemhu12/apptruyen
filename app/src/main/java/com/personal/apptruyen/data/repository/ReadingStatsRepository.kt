@@ -52,28 +52,37 @@ class ReadingStatsRepository
 
         suspend fun getRecentStats(days: Int = 7): List<ReadingStatsEntity> = readingStatsDao.getRecentStats(days)
 
+        private fun ReadingStatsEntity.isActiveDay(): Boolean = totalReadingTimeMs > 0L || chaptersRead > 0
+
         /**
          * Tính streak — số ngày đọc liên tiếp tính đến hôm nay.
          */
-        suspend fun getReadingStreak(): Int {
+        suspend fun getReadingStreak(): Int = getReadingStreak(System.currentTimeMillis())
+
+        internal suspend fun getReadingStreak(nowMillis: Long): Int {
             val recent = readingStatsDao.getRecentStats(365) // last year
             if (recent.isEmpty()) return 0
+
+            val statsByDate = recent.associateBy { it.date }
             val sdf = SimpleDateFormat("yyyy-MM-dd", Locale.US)
+            val calendar = Calendar.getInstance().apply { timeInMillis = nowMillis }
+
+            val todayDate = sdf.format(calendar.time)
+            if (statsByDate[todayDate]?.isActiveDay() != true) {
+                calendar.add(Calendar.DAY_OF_YEAR, -1)
+                val yesterdayDate = sdf.format(calendar.time)
+                if (statsByDate[yesterdayDate]?.isActiveDay() != true) {
+                    return 0
+                }
+            }
+
             var streak = 0
-            val cal = Calendar.getInstance()
-            // Start from today
-            for (i in recent.indices) {
-                val expectedDate = sdf.format(cal.time)
-                val stat = recent.getOrNull(i)
-                if (stat != null && stat.date == expectedDate && stat.totalReadingTimeMs > 0) {
+            while (streak < 365) {
+                val dateKey = sdf.format(calendar.time)
+                if (statsByDate[dateKey]?.isActiveDay() == true) {
                     streak++
-                    cal.add(Calendar.DAY_OF_YEAR, -1)
+                    calendar.add(Calendar.DAY_OF_YEAR, -1)
                 } else {
-                    // If today has no stats yet but we're checking today, skip
-                    if (i == 0 && stat?.date != expectedDate) {
-                        cal.add(Calendar.DAY_OF_YEAR, -1)
-                        continue
-                    }
                     break
                 }
             }

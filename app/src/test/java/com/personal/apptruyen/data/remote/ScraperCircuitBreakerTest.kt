@@ -169,4 +169,22 @@ class ScraperCircuitBreakerTest {
         assertEquals(ScraperCircuitBreaker.State.OPEN, breaker.getState("source1"))
         assertEquals(ScraperCircuitBreaker.State.CLOSED, breaker.getState("source2"))
     }
+
+    @Test
+    fun `execute rethrows CancellationException without recording failure`() =
+        runTest {
+            repeat(2) { breaker.recordFailure(sourceId) }
+            assertEquals(ScraperCircuitBreaker.State.CLOSED, breaker.getState(sourceId))
+
+            assertThrows(kotlinx.coroutines.CancellationException::class.java) {
+                kotlinx.coroutines.runBlocking {
+                    breaker.execute(sourceId) {
+                        throw kotlinx.coroutines.CancellationException("cancelled")
+                    }
+                }
+            }
+
+            // Failure count must remain 2 (circuit still CLOSED, not tripped to OPEN at threshold 3)
+            assertEquals(ScraperCircuitBreaker.State.CLOSED, breaker.getState(sourceId))
+        }
 }

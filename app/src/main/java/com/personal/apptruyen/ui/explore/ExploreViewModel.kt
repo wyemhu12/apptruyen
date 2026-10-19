@@ -4,12 +4,14 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.personal.apptruyen.data.model.Genre
 import com.personal.apptruyen.data.model.Story
+import com.personal.apptruyen.data.remote.ScraperException
 import com.personal.apptruyen.data.repository.ISourceAuthRepository
 import com.personal.apptruyen.data.repository.IStoryRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.collections.immutable.ImmutableList
 import kotlinx.collections.immutable.persistentListOf
 import kotlinx.collections.immutable.toImmutableList
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -63,7 +65,8 @@ class ExploreViewModel
                 try {
                     val genres = repository.getGenreList()
                     _state.update { it.copy(genres = genres.toImmutableList()) }
-                } catch (_: Exception) {
+                } catch (e: Exception) {
+                    if (e is CancellationException) throw e
                     // silent - genres are optional
                 }
             }
@@ -98,10 +101,11 @@ class ExploreViewModel
                             )
                         }
                     } catch (e: Exception) {
+                        if (e is CancellationException) throw e
                         _state.update {
                             it.copy(
                                 isLoading = false,
-                                error = "Lỗi tải dữ liệu: ${e.localizedMessage ?: "Không thể kết nối"}",
+                                error = (e as? ScraperException)?.message ?: "Không thể kết nối. Vui lòng kiểm tra mạng và thử lại.",
                             )
                         }
                     }
@@ -125,18 +129,22 @@ class ExploreViewModel
                                 repository.getCompletedStories(page = nextPage)
                             }
                         _state.update {
+                            val merged = deduplicateStories(it.stories + moreStories)
+                            val hasNewItems = merged.size > it.stories.size
                             it.copy(
-                                stories = deduplicateStories(it.stories + moreStories).toImmutableList(),
+                                stories = merged.toImmutableList(),
                                 isLoadingMore = false,
-                                currentPage = nextPage,
-                                canLoadMore = moreStories.isNotEmpty(),
+                                currentPage = if (hasNewItems) nextPage else it.currentPage,
+                                canLoadMore = moreStories.isNotEmpty() && hasNewItems,
                             )
                         }
                     } catch (e: Exception) {
+                        if (e is CancellationException) throw e
                         _state.update {
                             it.copy(
                                 isLoadingMore = false,
-                                error = "Lỗi tải thêm: ${e.localizedMessage ?: "Không thể kết nối"}",
+                                canLoadMore = false,
+                                error = (e as? ScraperException)?.message ?: "Không thể tải thêm truyện. Vui lòng thử lại.",
                             )
                         }
                     }
@@ -170,10 +178,11 @@ class ExploreViewModel
                             )
                         }
                     } catch (e: Exception) {
+                        if (e is CancellationException) throw e
                         _state.update {
                             it.copy(
                                 isRefreshing = false,
-                                error = "Lỗi làm mới: ${e.localizedMessage ?: "Không thể kết nối"}",
+                                error = (e as? ScraperException)?.message ?: "Không thể làm mới dữ liệu. Vui lòng kiểm tra mạng và thử lại.",
                             )
                         }
                     }

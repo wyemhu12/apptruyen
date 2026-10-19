@@ -57,7 +57,7 @@ class SsTruyenScraperTest {
             val results = scraper.search("tien", completedOnly = false)
             assertEquals(1, results.size)
             val story = results.first()
-            assertEquals("tien-nghich", story.id)
+            assertEquals("sstruyen_tien-nghich", story.id)
             assertEquals("tien-nghich", story.slug)
             assertEquals("Tiên Nghịch", story.title)
             assertEquals("Nhĩ Căn", story.author)
@@ -87,7 +87,7 @@ class SsTruyenScraperTest {
 
             val results = scraper.search("truyen", completedOnly = true)
             assertEquals(1, results.size)
-            assertEquals("tien-nghich", results.first().id)
+            assertEquals("sstruyen_tien-nghich", results.first().id)
         }
 
     @Test
@@ -463,7 +463,7 @@ class SsTruyenScraperTest {
             val results = scraper.search("hogwarts", completedOnly = false)
             assertEquals(1, results.size)
             val story = results.first()
-            assertEquals("hogwarts-ta-that-su-la-dien-hinh-vu-su", story.id)
+            assertEquals("sstruyen_hogwarts-ta-that-su-la-dien-hinh-vu-su", story.id)
             assertEquals(483, story.totalChapters)
         }
 
@@ -575,6 +575,18 @@ class SsTruyenScraperTest {
         assertEquals(
             "",
             scraper.normalizeCoverUrl("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwC"),
+        )
+    }
+
+    @Test
+    fun `normalizeCoverUrl upgrades http cover to https via validateCoverUrl and preserves localhost`() {
+        assertEquals(
+            "https://cdn.sstruyen.vn/cover.jpg",
+            scraper.normalizeCoverUrl("http://cdn.sstruyen.vn/cover.jpg"),
+        )
+        assertEquals(
+            "http://localhost:8080/cover.jpg",
+            scraper.normalizeCoverUrl("http://localhost:8080/cover.jpg"),
         )
     }
 }

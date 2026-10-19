@@ -6,10 +6,14 @@ import javax.inject.Singleton
 
 @Singleton
 class AndroidCookieStore
-    @Inject
-    constructor() : CookieStore {
+    internal constructor(
+        private val cookieManagerProvider: () -> CookieManager,
+    ) : CookieStore {
+        @Inject
+        constructor() : this({ CookieManager.getInstance() })
+
         private val cookieManager: CookieManager
-            get() = CookieManager.getInstance()
+            get() = cookieManagerProvider()
 
         override fun getCookie(url: String): String? = cookieManager.getCookie(url)
 
@@ -24,13 +28,39 @@ class AndroidCookieStore
             url: String,
             cookieNames: List<String>,
         ) {
-            val domain = url.substringAfter("://").substringBefore("/")
-            for (name in cookieNames) {
-                // Xóa host-only
-                cookieManager.setCookie(url, "$name=; Path=/; Max-Age=0; Expires=Thu, 01 Jan 1970 00:00:00 GMT")
-                // Xóa wildcard domain
-                cookieManager.setCookie("https://$domain", "$name=; Path=/; Domain=.$domain; Max-Age=0; Expires=Thu, 01 Jan 1970 00:00:00 GMT")
+            val normalizedUrl =
+                if (url.startsWith("http://") || url.startsWith("https://")) {
+                    url
+                } else {
+                    "https://${url.trimStart('/')}"
+                }
+            val domain = normalizedUrl.substringAfter("://").substringBefore("/").substringBefore(":")
+            val namesToRemove =
+                cookieNames.ifEmpty {
+                    getCookie(normalizedUrl)
+                        ?.split(";")
+                        ?.mapNotNull { segment ->
+                            segment.substringBefore("=", "").trim().takeIf { it.isNotEmpty() }
+                        }?.distinct()
+                        ?: emptyList()
+                }
+            for (name in namesToRemove) {
+                if (name.isNotEmpty()) {
+                    // Xóa host-only
+                    cookieManager.setCookie(
+                        normalizedUrl,
+                        "$name=; Path=/; Max-Age=0; Expires=Thu, 01 Jan 1970 00:00:00 GMT",
+                    )
+                    // Xóa wildcard domain
+                    if (domain.isNotEmpty()) {
+                        cookieManager.setCookie(
+                            "https://$domain",
+                            "$name=; Path=/; Domain=.$domain; Max-Age=0; Expires=Thu, 01 Jan 1970 00:00:00 GMT",
+                        )
+                    }
+                }
             }
+            cookieManager.flush()
         }
 
         override fun removeAllCookies() {

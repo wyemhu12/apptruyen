@@ -53,21 +53,7 @@ class ReadingProgressRepository
 
         override fun getRecentlyReadStories(): Flow<List<Story>> =
             storyDao.getRecentlyReadStories().map { list ->
-                list.map {
-                    Story(
-                        id = it.id,
-                        slug = it.slug,
-                        title = it.title,
-                        author = it.author,
-                        genres = it.genres.split(",").filter { g -> g.isNotBlank() },
-                        description = it.description,
-                        url = it.url,
-                        totalChapters = it.totalChapters,
-                        coverImageUrl = it.coverImageUrl,
-                        sourceId = it.sourceId,
-                        status = it.status,
-                    )
-                }
+                list.map { it.toDomain() }
             }
 
         override fun getAllReadingProgress(): Flow<List<ReadingProgress>> =

@@ -19,6 +19,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -26,7 +27,7 @@ fun ReadingStatsScreen(
     onBack: () -> Unit,
     viewModel: ReadingStatsViewModel = hiltViewModel(),
 ) {
-    val state by viewModel.state.collectAsState()
+    val state by viewModel.state.collectAsStateWithLifecycle()
 
     Scaffold(
         topBar = {
@@ -95,7 +96,7 @@ fun ReadingStatsScreen(
                         StatCard(
                             modifier = Modifier.weight(1f),
                             icon = Icons.Default.LocalFireDepartment,
-                            title = "Streak",
+                            title = "Chuỗi ngày",
                             value = "${state.streak} ngày",
                             color = Color(0xFFFF6B35),
                         )

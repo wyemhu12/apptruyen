@@ -16,6 +16,7 @@ import com.personal.apptruyen.data.local.ReadingStatsDao
 import com.personal.apptruyen.data.local.SearchHistoryDao
 import com.personal.apptruyen.data.local.StoryDao
 import com.personal.apptruyen.data.local.settingsDataStore
+import com.personal.apptruyen.data.remote.ResilientDohDns
 import com.personal.apptruyen.data.remote.cookie.AndroidCookieStore
 import com.personal.apptruyen.data.remote.cookie.CookieStore
 import com.personal.apptruyen.data.remote.cookie.WebViewCookieHandler
@@ -54,6 +55,7 @@ object AppModule {
         OkHttpClient
             .Builder()
             .cookieJar(cookieHandler)
+            .dns(ResilientDohDns())
             .connectTimeout(15, TimeUnit.SECONDS)
             .readTimeout(30, TimeUnit.SECONDS)
             .writeTimeout(15, TimeUnit.SECONDS)

@@ -34,6 +34,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.personal.apptruyen.data.model.Genre
 import com.personal.apptruyen.ui.components.ShimmerStoryCard
 import com.personal.apptruyen.ui.components.StoryCardPremium
@@ -47,11 +48,11 @@ fun SearchScreen(
     onNavigateToSourceLogin: (String) -> Unit = {},
     viewModel: SearchViewModel = hiltViewModel(),
 ) {
-    val state by viewModel.state.collectAsState()
-    val recentSearches by viewModel.recentSearches.collectAsState()
-    val searchSuggestions by viewModel.searchSuggestions.collectAsState()
-    val loginRequiredSources by viewModel.loginRequiredSources.collectAsState()
-    val genres by viewModel.genres.collectAsState()
+    val state by viewModel.state.collectAsStateWithLifecycle()
+    val recentSearches by viewModel.recentSearches.collectAsStateWithLifecycle()
+    val searchSuggestions by viewModel.searchSuggestions.collectAsStateWithLifecycle()
+    val loginRequiredSources by viewModel.loginRequiredSources.collectAsStateWithLifecycle()
+    val genres by viewModel.genres.collectAsStateWithLifecycle()
     var showFilterSheet by remember { mutableStateOf(false) }
     val listState = rememberLazyListState()
 
@@ -109,7 +110,8 @@ fun SearchScreen(
             modifier =
                 Modifier
                     .fillMaxSize()
-                    .padding(padding),
+                    .padding(padding)
+                    .imePadding(),
         ) {
             // ─── Search bar with inline filter button ───
             Row(

@@ -51,4 +51,28 @@ class TextFormatHelperTest {
 
         assertEquals("Đặc vụ S.H.I.E.L.D gặp Spider-Man... Họ nói chuyện!", formatted)
     }
+
+    @Test
+    fun `formatChapter preserves decimal numbers and thousand separators like 3_14 and 1_000`() {
+        val input = "Chỉ số pi là 3.14 và có 1.000 người hay 1,5 tấn.Nhưng hắn không tin."
+        val formatted = TextFormatHelper.formatChapter(input)
+
+        assertEquals("Chỉ số pi là 3.14 và có 1.000 người hay 1,5 tấn. Nhưng hắn không tin.", formatted)
+    }
+
+    @Test
+    fun `formatChapter preserves time and ratio expressions like 12_30 and 3_2 while spacing normal colons`() {
+        val input = "Trận đấu lúc 12:30 kết thúc với tỷ số 3:2.Chương 1:Mở đầu"
+        val formatted = TextFormatHelper.formatChapter(input)
+
+        assertEquals("Trận đấu lúc 12:30 kết thúc với tỷ số 3:2. Chương 1: Mở đầu", formatted)
+    }
+
+    @Test
+    fun `formatChapter preserves URLs and domain names without corrupting slashes or dots`() {
+        val input = "Đọc tại https://wikicv.org/truyen/abc hoặc sstruyen.pics.Nhưng đừng quên!"
+        val formatted = TextFormatHelper.formatChapter(input)
+
+        assertEquals("Đọc tại https://wikicv.org/truyen/abc hoặc sstruyen.pics. Nhưng đừng quên!", formatted)
+    }
 }

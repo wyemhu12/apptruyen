@@ -101,4 +101,26 @@ class DownloadsViewModelTest {
             viewModel.updateSearchQuery("")
             assertEquals("", viewModel.searchQuery.value)
         }
+
+    @Test
+    fun `deleteDownloads and deleteEntireStory catch exceptions and emit Vietnamese errorMessage`() =
+        runTest {
+            coEvery { downloadRepository.deleteAllDownloads("test.1") } throws RuntimeException("SQLite disk I/O error")
+            coEvery { downloadRepository.deleteStory("test.1") } throws RuntimeException("SQLite disk I/O error")
+
+            viewModel = DownloadsViewModel(downloadRepository)
+            advanceUntilIdle()
+            assertNull(viewModel.errorMessage.value)
+
+            viewModel.deleteDownloads("test.1")
+            advanceUntilIdle()
+            assertEquals("Không xóa được các chương đã tải. Vui lòng thử lại.", viewModel.errorMessage.value)
+
+            viewModel.clearError()
+            assertNull(viewModel.errorMessage.value)
+
+            viewModel.deleteEntireStory("test.1")
+            advanceUntilIdle()
+            assertEquals("Không xóa được truyện. Vui lòng thử lại.", viewModel.errorMessage.value)
+        }
 }

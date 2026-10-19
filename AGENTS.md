@@ -1,6 +1,6 @@
 # AGENTS.md — AppTruyen Project Context
 
-Đây là ứng dụng Android cá nhân đọc và nghe truyện chữ (TTS), tự động gộp dữ liệu từ 4 nguồn (TruyenCom, Tàng Thư Viện, SsTruyện, TruyenFull), viết bằng Kotlin.
+Đây là ứng dụng Android cá nhân đọc và nghe truyện chữ (TTS), tự động gộp dữ liệu từ 3 nguồn hoạt động (Tàng Thư Viện, SsTruyện, Wikidich), viết bằng Kotlin.
 
 ## Quy tắc quan trọng
 

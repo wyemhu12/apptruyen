@@ -15,6 +15,9 @@ interface StoryDao {
     @Query("SELECT * FROM stories WHERE id = :storyId")
     suspend fun getStoryById(storyId: String): StoryEntity?
 
+    @Query("SELECT * FROM stories WHERE url = :url LIMIT 1")
+    suspend fun getStoryByUrl(url: String): StoryEntity?
+
     @Query("SELECT * FROM stories WHERE id = :storyId")
     fun observeStory(storyId: String): Flow<StoryEntity?>
 
@@ -53,7 +56,10 @@ interface StoryDao {
     )
     fun getDownloadedStories(): Flow<List<StoryEntity>>
 
-    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    suspend fun insertStoryIgnore(story: StoryEntity): Long
+
+    @Upsert
     suspend fun insertStories(stories: List<StoryEntity>)
 
     @Query("SELECT * FROM stories")

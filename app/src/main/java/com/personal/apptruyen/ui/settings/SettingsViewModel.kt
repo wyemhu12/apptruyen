@@ -9,6 +9,8 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.personal.apptruyen.data.local.SettingsKeys
 import com.personal.apptruyen.data.local.SourceIds
+import com.personal.apptruyen.data.local.getIntSafe
+import com.personal.apptruyen.data.local.healCorruptedIntPreferences
 import com.personal.apptruyen.data.repository.BackupRepository
 import com.personal.apptruyen.data.repository.ISourceAuthRepository
 import com.personal.apptruyen.util.CrashHandler
@@ -17,9 +19,12 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.collections.immutable.ImmutableList
 import kotlinx.collections.immutable.persistentListOf
 import kotlinx.collections.immutable.toImmutableList
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import timber.log.Timber
 import javax.inject.Inject
 
 enum class ReaderThemeOption(
@@ -101,7 +106,20 @@ class SettingsViewModel
         private val isWikidichLoggedInFlow = MutableStateFlow(false)
 
         init {
+            viewModelScope.launch {
+                try {
+                    dataStore.healCorruptedIntPreferences()
+                } catch (e: Exception) {
+                    if (e is CancellationException) throw e
+                    Timber.w(e, "Failed to heal corrupted Int preferences")
+                }
+            }
             checkAuthStatus()
+            viewModelScope.launch {
+                authRepository.getAuthState(SourceIds.WIKIDICH).collect { loggedIn ->
+                    isWikidichLoggedInFlow.value = loggedIn
+                }
+            }
         }
 
         fun checkAuthStatus() {
@@ -117,8 +135,8 @@ class SettingsViewModel
                     ttsPitch = prefs[SettingsKeys.TTS_PITCH] ?: 1.0f,
                     ttsVoice = prefs[SettingsKeys.TTS_VOICE] ?: "",
                     fontSize = prefs[SettingsKeys.FONT_SIZE] ?: 18f,
-                    theme = ReaderThemeOption.fromValue(prefs[SettingsKeys.THEME] ?: 0),
-                    appThemeMode = AppThemeMode.fromValue(prefs[SettingsKeys.APP_THEME_MODE] ?: 0),
+                    theme = ReaderThemeOption.fromValue(prefs.getIntSafe(SettingsKeys.THEME, 0)),
+                    appThemeMode = AppThemeMode.fromValue(prefs.getIntSafe(SettingsKeys.APP_THEME_MODE, 0)),
                     dynamicColor = prefs[SettingsKeys.DYNAMIC_COLOR] ?: true,
                     textReplacementEnabled = prefs[SettingsKeys.TEXT_REPLACEMENT_ENABLED] ?: true,
                     autoFormatEnabled = prefs[SettingsKeys.AUTO_FORMAT_ENABLED] ?: true,
@@ -133,8 +151,10 @@ class SettingsViewModel
                             ?.split(",")
                             ?.filter { it.isNotBlank() }
                             ?.toSet()
+                            ?.intersect(ALL_SOURCES)
+                            ?.ifEmpty { ALL_SOURCES }
                             ?: ALL_SOURCES,
-                    prefetchChapters = prefs[SettingsKeys.PREFETCH_CHAPTERS] ?: 0,
+                    prefetchChapters = prefs.getIntSafe(SettingsKeys.PREFETCH_CHAPTERS, 0),
                     isWikidichLoggedIn = isWikidichLoggedIn,
                 )
             }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), SettingsState())
@@ -224,14 +244,27 @@ class SettingsViewModel
 
         fun toggleSource(sourceId: String) {
             viewModelScope.launch {
-                val current = state.value.enabledSources.toMutableSet()
-                if (current.contains(sourceId)) {
-                    // Không cho tắt nguồn cuối cùng
-                    if (current.size > 1) current.remove(sourceId)
-                } else {
-                    current.add(sourceId)
+                dataStore.edit { prefs ->
+                    val current =
+                        (
+                            prefs[SettingsKeys.ENABLED_SOURCES]
+                                ?.split(",")
+                                ?.filter { it.isNotBlank() }
+                                ?.toSet()
+                                ?.intersect(ALL_SOURCES)
+                                ?.ifEmpty { ALL_SOURCES }
+                                ?: state.value.enabledSources
+                                    .intersect(ALL_SOURCES)
+                                    .ifEmpty { ALL_SOURCES }
+                        ).toMutableSet()
+                    if (current.contains(sourceId)) {
+                        // Không cho tắt nguồn cuối cùng
+                        if (current.size > 1) current.remove(sourceId)
+                    } else if (sourceId in ALL_SOURCES) {
+                        current.add(sourceId)
+                    }
+                    prefs[SettingsKeys.ENABLED_SOURCES] = current.joinToString(",")
                 }
-                dataStore.edit { it[SettingsKeys.ENABLED_SOURCES] = current.joinToString(",") }
             }
         }
 
@@ -248,6 +281,32 @@ class SettingsViewModel
 
         private val _backupProgressText = MutableStateFlow("")
         val backupProgressText: StateFlow<String> = _backupProgressText.asStateFlow()
+
+        internal fun mapBackupErrorMessage(
+            isExport: Boolean,
+            error: Throwable,
+        ): String {
+            val msg = error.message?.trim().orEmpty()
+            val isKnownVietnameseMessage =
+                (error is IllegalArgumentException || error is IllegalStateException) &&
+                    msg.isNotEmpty() &&
+                    (
+                        msg.startsWith("Tệp sao lưu") ||
+                            msg.startsWith("File backup") ||
+                            msg.startsWith("Phiên bản") ||
+                            msg.startsWith("Đường dẫn") ||
+                            msg.startsWith("Dữ liệu") ||
+                            msg.startsWith("Chương ") ||
+                            msg.startsWith("Tổng dung lượng") ||
+                            msg.startsWith("Không thể")
+                    )
+            if (isKnownVietnameseMessage) return msg
+            return if (isExport) {
+                "Không thể sao lưu dữ liệu. Vui lòng kiểm tra dung lượng bộ nhớ và thử lại."
+            } else {
+                "Không thể khôi phục dữ liệu. Tệp sao lưu không hợp lệ hoặc bị hỏng."
+            }
+        }
 
         fun exportBackup(
             uri: Uri,
@@ -266,7 +325,9 @@ class SettingsViewModel
                     }
                     _backupState.value = BackupState.Success("Sao lưu thành công!")
                 } catch (e: Exception) {
-                    _backupState.value = BackupState.Error("Lỗi sao lưu: ${e.message}")
+                    if (e is CancellationException) throw e
+                    Timber.e(e, "Export backup failed")
+                    _backupState.value = BackupState.Error(mapBackupErrorMessage(isExport = true, error = e))
                 }
             }
         }
@@ -288,7 +349,9 @@ class SettingsViewModel
                     }
                     _backupState.value = BackupState.Success("Khôi phục thành công!")
                 } catch (e: Exception) {
-                    _backupState.value = BackupState.Error("Lỗi khôi phục: ${e.message}")
+                    if (e is CancellationException) throw e
+                    Timber.e(e, "Import backup failed")
+                    _backupState.value = BackupState.Error(mapBackupErrorMessage(isExport = false, error = e))
                 }
             }
         }
@@ -304,11 +367,32 @@ class SettingsViewModel
         val crashLogs: StateFlow<List<CrashHandler.CrashLog>> = _crashLogs.asStateFlow()
 
         fun loadCrashLogs(context: Context) {
-            _crashLogs.value = CrashHandler.getCrashLogs(context)
+            val appContext = context.applicationContext
+            viewModelScope.launch {
+                try {
+                    _crashLogs.value =
+                        withContext(Dispatchers.IO) {
+                            CrashHandler.getCrashLogs(appContext)
+                        }
+                } catch (e: Exception) {
+                    if (e is CancellationException) throw e
+                    Timber.e(e, "Failed to load crash logs")
+                }
+            }
         }
 
         fun clearCrashLogs(context: Context) {
-            CrashHandler.clearCrashLogs(context)
-            _crashLogs.value = emptyList()
+            val appContext = context.applicationContext
+            viewModelScope.launch {
+                try {
+                    withContext(Dispatchers.IO) {
+                        CrashHandler.clearCrashLogs(appContext)
+                    }
+                    _crashLogs.value = emptyList()
+                } catch (e: Exception) {
+                    if (e is CancellationException) throw e
+                    Timber.e(e, "Failed to clear crash logs")
+                }
+            }
         }
     }

@@ -137,5 +137,11 @@ class TtsPlaybackStateMachine(
 
     companion object {
         const val DEFAULT_AUTO_ADVANCE_TIMEOUT_MS = 10_000L
+
+        fun shouldProcessUtteranceDone(
+            utteranceId: String?,
+            currentParagraphIndex: Int,
+            isPlaying: Boolean,
+        ): Boolean = isPlaying && utteranceId == "paragraph_$currentParagraphIndex"
     }
 }

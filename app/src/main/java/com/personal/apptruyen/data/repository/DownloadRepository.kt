@@ -1,6 +1,5 @@
 package com.personal.apptruyen.data.repository
 
-import android.util.Log
 import com.personal.apptruyen.data.local.ChapterDao
 import com.personal.apptruyen.data.local.DatabaseTransactionRunner
 import com.personal.apptruyen.data.local.ReadingProgressDao
@@ -21,6 +20,7 @@ import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.map
+import timber.log.Timber
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -52,8 +52,21 @@ class DownloadRepository
             const val MAX_BATCH_DELAY_MS = 3000L
             const val MAX_CONSECUTIVE_FAILED_BATCHES = 3
             const val SQLITE_MAX_BIND_ARGS = 900
+            const val WIKIDICH_SOURCE_ID = "wikidich"
+            const val WIKIDICH_BATCH_SIZE = 1
+            const val WIKIDICH_MIN_DELAY_MS = 15_000L
+            const val WIKIDICH_MAX_DELAY_MS = 20_000L
+            const val WIKIDICH_RETRY_DELAY_MS = 5_000L
+            val RATE_LIMIT_HTTP_CODES = setOf(403, 429, 503)
             private val DUMMY_TITLE_REGEX = Regex("^Chương \\d+$")
         }
+
+        internal var wikidichDelayProvider: () -> Long = {
+            kotlin.random.Random.nextLong(WIKIDICH_MIN_DELAY_MS, WIKIDICH_MAX_DELAY_MS + 1)
+        }
+
+        internal fun isRateLimitHttpError(error: Throwable?): Boolean =
+            error is ScraperException.HttpException && error.statusCode in RATE_LIMIT_HTTP_CODES
 
         private fun sourceFor(url: String): StorySource =
             sources.firstOrNull { it.matchesUrl(url) }
@@ -87,15 +100,15 @@ class DownloadRepository
                 val fresh = source.getStoryDetail(existing.url)
                 val entity =
                     com.personal.apptruyen.data.local.entity.StoryEntity(
-                        id = fresh.id,
+                        id = existing.id,
                         slug = fresh.slug,
                         title = fresh.title,
                         author = fresh.author,
                         genres = fresh.genres.joinToString(","),
                         description = fresh.description,
                         url = fresh.url,
-                        totalChapters = fresh.totalChapters,
-                        coverImageUrl = fresh.coverImageUrl,
+                        totalChapters = resolveSafeTotalChapters(fresh.totalChapters, existing.totalChapters),
+                        coverImageUrl = resolveSafeCoverUrl(fresh.coverImageUrl, existing.coverImageUrl),
                         sourceId = fresh.sourceId,
                         status = fresh.status,
                         isInLibrary = existing.isInLibrary,
@@ -104,9 +117,10 @@ class DownloadRepository
                         storyCustomReplacements = existing.storyCustomReplacements,
                     )
                 storyDao.insertStory(entity)
-                Log.d("DownloadRepo", "Snapshot metadata saved for $storyId")
+                Timber.tag("DownloadRepo").d("Snapshot metadata saved for %s", storyId)
             } catch (e: Exception) {
-                Log.d("DownloadRepo", "Snapshot metadata failed for $storyId (offline?)", e)
+                if (e is CancellationException) throw e
+                Timber.tag("DownloadRepo").d(e, "Snapshot metadata failed for %s (offline?)", storyId)
             }
         }
 
@@ -134,6 +148,9 @@ class DownloadRepository
                 } catch (e: ScraperException.CircuitOpenException) {
                     return ChapterFetchOutcome(chapter = chapter, error = e)
                 } catch (e: Exception) {
+                    if (source.sourceId == WIKIDICH_SOURCE_ID && isRateLimitHttpError(e)) {
+                        return ChapterFetchOutcome(chapter = chapter, error = e)
+                    }
                     lastError = e
                     if (attempt < MAX_RETRY_ATTEMPTS) {
                         delay(retryDelayMs)
@@ -158,18 +175,21 @@ class DownloadRepository
                 val sortedChapters = chapters.sortedBy { it.chapterNumber }
                 val firstValidUrl = sortedChapters.firstOrNull { it.url.isNotBlank() }?.url ?: ""
                 val source = sourceFor(firstValidUrl)
-                val batches = sortedChapters.chunked(DOWNLOAD_BATCH_SIZE)
+                val isWikidich = source.sourceId == WIKIDICH_SOURCE_ID
+                val batchSize = if (isWikidich) WIKIDICH_BATCH_SIZE else DOWNLOAD_BATCH_SIZE
+                val batches = sortedChapters.chunked(batchSize)
 
                 for ((batchIndex, batch) in batches.withIndex()) {
                     currentCoroutineContext().ensureActive()
                     emit(DownloadProgress(downloaded, sortedChapters.size, batch.first().title, errors))
 
+                    val retryDelayMs = if (isWikidich) WIKIDICH_RETRY_DELAY_MS else currentDelay
                     val batchOutcomes =
                         coroutineScope {
                             batch
                                 .map { chapter ->
                                     async {
-                                        fetchChapterWithRetry(source, chapter, currentDelay)
+                                        fetchChapterWithRetry(source, chapter, retryDelayMs)
                                     }
                                 }.awaitAll()
                         }
@@ -183,35 +203,46 @@ class DownloadRepository
                         val chapter = outcome.chapter
                         val result = outcome.result
                         if (result != null) {
-                            chapterDao.saveChapterContent(storyId, chapter.chapterNumber, result.content)
-
-                            if (!result.title.isNullOrBlank()) {
-                                val isDummy = chapter.title.matches(DUMMY_TITLE_REGEX)
-                                if (isDummy || chapter.title.isBlank()) {
-                                    chapterDao.updateChapterMetadata(
-                                        storyId = storyId,
-                                        chapterNumber = chapter.chapterNumber,
-                                        title = result.title,
-                                        url = chapter.url,
-                                    )
+                            val isDummy = chapter.title.matches(DUMMY_TITLE_REGEX)
+                            val titleToSave =
+                                if (!result.title.isNullOrBlank() && (isDummy || chapter.title.isBlank())) {
+                                    result.title
+                                } else {
+                                    chapter.title
                                 }
+                            chapterDao.saveChapterContent(
+                                storyId = storyId,
+                                chapterNumber = chapter.chapterNumber,
+                                content = result.content,
+                                title = titleToSave,
+                                url = chapter.url,
+                            )
+
+                            if (!result.title.isNullOrBlank() && (isDummy || chapter.title.isBlank())) {
+                                chapterDao.updateChapterMetadata(
+                                    storyId = storyId,
+                                    chapterNumber = chapter.chapterNumber,
+                                    title = result.title,
+                                    url = chapter.url,
+                                )
                             }
+                            downloaded++
                         } else {
                             errors++
                             batchErrors++
-                            Log.e("DownloadRepo", "Download error for ${chapter.title}", outcome.error)
+                            Timber.tag("DownloadRepo").e(outcome.error, "Download error for %s", chapter.title)
                             if (
                                 fatalError == null &&
                                 (
                                     outcome.error is ScraperException.LoginRequiredException ||
-                                        outcome.error is ScraperException.CircuitOpenException
+                                        outcome.error is ScraperException.CircuitOpenException ||
+                                        (isWikidich && isRateLimitHttpError(outcome.error))
                                 )
                             ) {
-                                fatalError = outcome.error
+                                fatalError = outcome.error as? ScraperException
                             }
                         }
 
-                        downloaded++
                         emit(DownloadProgress(downloaded, sortedChapters.size, chapter.title, errors))
                     }
 
@@ -227,9 +258,10 @@ class DownloadRepository
                         }
 
                     if (consecutiveFailedBatches >= MAX_CONSECUTIVE_FAILED_BATCHES) {
-                        Log.w(
-                            "DownloadRepo",
-                            "Aborting download after $consecutiveFailedBatches consecutive failed batches for $storyId",
+                        Timber.tag("DownloadRepo").w(
+                            "Aborting download after %d consecutive failed batches for %s",
+                            consecutiveFailedBatches,
+                            storyId,
                         )
                         break
                     }
@@ -242,28 +274,19 @@ class DownloadRepository
                         }
 
                     if (batchIndex < batches.lastIndex) {
-                        delay(currentDelay)
+                        if (isWikidich) {
+                            val randomDelay = wikidichDelayProvider().coerceIn(WIKIDICH_MIN_DELAY_MS, WIKIDICH_MAX_DELAY_MS)
+                            delay(randomDelay)
+                        } else {
+                            delay(currentDelay)
+                        }
                     }
                 }
             }
 
         override fun getDownloadedStories(): Flow<List<Story>> =
             storyDao.getDownloadedStories().map { list ->
-                list.map {
-                    Story(
-                        id = it.id,
-                        slug = it.slug,
-                        title = it.title,
-                        author = it.author,
-                        genres = it.genres.split(",").filter { g -> g.isNotBlank() },
-                        description = it.description,
-                        url = it.url,
-                        totalChapters = it.totalChapters,
-                        coverImageUrl = it.coverImageUrl,
-                        sourceId = it.sourceId,
-                        status = it.status,
-                    )
-                }
+                list.map { it.toDomain() }
             }
 
         override fun getDownloadedChapters(storyId: String): Flow<List<Chapter>> =

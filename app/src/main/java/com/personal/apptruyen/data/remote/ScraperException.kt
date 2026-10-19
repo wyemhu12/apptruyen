@@ -20,7 +20,18 @@ sealed class ScraperException(
         val statusCode: Int,
         val url: String,
         cause: Throwable? = null,
-    ) : ScraperException("Lỗi HTTP $statusCode từ $url", cause)
+    ) : ScraperException(
+            message =
+                when (statusCode) {
+                    403 -> "Máy chủ từ chối truy cập (HTTP 403)."
+                    404 -> "Không tìm thấy nội dung yêu cầu (HTTP 404)."
+                    408 -> "Hết thời gian chờ phản hồi từ máy chủ (HTTP 408)."
+                    429 -> "Quá nhiều yêu cầu, vui lòng thử lại sau (HTTP 429)."
+                    in 500..599 -> "Máy chủ nguồn truyện đang gặp sự cố (HTTP $statusCode)."
+                    else -> "Lỗi phản hồi từ máy chủ (HTTP $statusCode)."
+                },
+            cause = cause,
+        )
 
     /** Parse HTML thất bại (selector không match, format thay đổi) */
     class ParseException(
@@ -60,6 +71,7 @@ sealed class ScraperException(
  */
 fun Exception.toScraperException(url: String = ""): ScraperException =
     when (this) {
+        is kotlinx.coroutines.CancellationException -> throw this
         is ScraperException -> this
         is java.net.UnknownHostException -> ScraperException.NetworkException(cause = this)
         is java.net.SocketTimeoutException ->
@@ -70,12 +82,12 @@ fun Exception.toScraperException(url: String = ""): ScraperException =
         is java.net.ConnectException -> ScraperException.NetworkException(cause = this)
         is java.io.IOException ->
             ScraperException.NetworkException(
-                message = this.message ?: "Lỗi kết nối mạng.",
+                message = "Không thể kết nối mạng. Vui lòng kiểm tra kết nối Internet.",
                 cause = this,
             )
         else ->
             ScraperException.UnknownException(
-                message = this.message ?: "Đã xảy ra lỗi không xác định.",
+                message = "Đã xảy ra lỗi không xác định khi tải dữ liệu.",
                 cause = this,
             )
     }

@@ -99,7 +99,7 @@ Hàm/biến `camelCase`, hằng số `UPPER_SNAKE_CASE`, Composable `PascalCase`
 
 ## Kích Thước File & Tính Mô-đun
 
-Thước đo chính là **Single Responsibility**. Số dòng chỉ là heuristic.
+> Tối ưu cho khả năng đọc hiểu của AI agent (Claude Opus 4.6 / 5.5, Gemini 4 Argon, Gemini 3.1 Pro). Thước đo chính là **Single Responsibility**; số dòng chỉ là heuristic.
 
 | Loại file                    | Mục tiêu | Tối đa | Khi nào tách                                         |
 | ---------------------------- | -------- | ------ | ---------------------------------------------------- |

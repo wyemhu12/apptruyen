@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.personal.apptruyen.data.model.Genre
 import com.personal.apptruyen.data.model.Story
+import com.personal.apptruyen.data.remote.ScraperException
 import com.personal.apptruyen.data.repository.ISourceAuthRepository
 import com.personal.apptruyen.data.repository.IStoryRepository
 import com.personal.apptruyen.data.repository.SearchHistoryRepository
@@ -11,6 +12,7 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.collections.immutable.ImmutableList
 import kotlinx.collections.immutable.persistentListOf
 import kotlinx.collections.immutable.toImmutableList
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -100,7 +102,8 @@ class SearchViewModel
             viewModelScope.launch {
                 try {
                     _genres.value = repository.getGenreList().toImmutableList()
-                } catch (_: Exception) {
+                } catch (e: Exception) {
+                    if (e is CancellationException) throw e
                     // Genres load failed — filter won't have options, but search still works
                 }
             }
@@ -129,34 +132,23 @@ class SearchViewModel
                         // KHÔNG CÓ status data trong search HTML. Nên trả hết để user thấy nhiều kết quả.
                         val rawResults = repository.searchStories(query, completedOnly = false)
                         val filtered = applyLocalFilters(rawResults).toImmutableList()
-                        val hasFilters =
-                            _state.value.selectedGenre != null ||
-                                _state.value.chapterFilter != ChapterCountFilter.NONE
                         _state.value =
                             _state.value.copy(
                                 results = filtered,
                                 isLoading = false,
                                 hasSearched = true,
-                                error =
-                                    if (filtered.isEmpty()) {
-                                        if (hasFilters) {
-                                            "Không tìm thấy truyện phù hợp bộ lọc"
-                                        } else {
-                                            "Không tìm thấy truyện nào với từ khóa \"$query\""
-                                        }
-                                    } else {
-                                        null
-                                    },
+                                error = null,
                             )
                         if (rawResults.isNotEmpty()) {
                             searchHistoryRepository.saveSearch(query)
                         }
                     } catch (e: Exception) {
+                        if (e is CancellationException) throw e
                         _state.value =
                             _state.value.copy(
                                 isLoading = false,
                                 hasSearched = true,
-                                error = "Lỗi tìm kiếm: ${e.localizedMessage ?: "Không thể kết nối"}",
+                                error = (e as? ScraperException)?.message ?: "Không thể kết nối. Vui lòng kiểm tra mạng và thử lại.",
                             )
                     }
                 }
@@ -194,9 +186,11 @@ class SearchViewModel
             if (hasKeyword) {
                 // Keyword + filter → search first, then filter client-side
                 search()
-            } else {
+            } else if (genre != null) {
                 // No keyword + genre → server-side genre browsing
-                genre?.let { browseByGenre(it, chapterFilter) }
+                browseByGenre(genre, chapterFilter)
+            } else if (hasChapterFilter) {
+                browseByFilterOnly(chapterFilter)
             }
         }
 
@@ -231,11 +225,12 @@ class SearchViewModel
 
             if (hasKeyword) {
                 search()
-            } else if (hasGenre && genre != null) {
+            } else if (genre != null) {
                 browseByGenre(genre, chapterFilter)
-            } else if (!hasAnyFilter) {
-                // Không filter, không keyword → clear
-                if (_state.value.hasSearched) clearFilter()
+            } else if (hasChapterFilter || completedIsNonDefault) {
+                browseByFilterOnly(chapterFilter)
+            } else if (_state.value.hasSearched) {
+                clearFilter()
             }
         }
 
@@ -244,6 +239,7 @@ class SearchViewModel
          */
         fun clearAllFilters() {
             val currentQuery = _state.value.query
+            val hadSearched = _state.value.hasSearched
             _state.update {
                 it.copy(
                     selectedGenre = null,
@@ -252,8 +248,10 @@ class SearchViewModel
                     isFilterActive = false,
                 )
             }
-            if (currentQuery.trim().isNotBlank() && _state.value.hasSearched) {
+            if (currentQuery.trim().isNotBlank() && hadSearched) {
                 search()
+            } else if (hadSearched) {
+                clearFilter()
             }
         }
 
@@ -282,15 +280,58 @@ class SearchViewModel
                                 isLoading = false,
                                 hasSearched = true,
                                 canLoadMore = results.isNotEmpty(),
-                                error = if (results.isEmpty()) "Không tìm thấy truyện nào trong thể loại ${genre.name}" else null,
+                                error = null,
                             )
                         }
+                    } catch (e: Exception) {
+                        if (e is CancellationException) throw e
+                        _state.update {
+                            it.copy(
+                                isLoading = false,
+                                hasSearched = true,
+                                error = (e as? ScraperException)?.message ?: "Không thể tải danh sách truyện. Vui lòng thử lại.",
+                            )
+                        }
+                    }
+                }
+        }
+
+        /**
+         * Browse stories when only chapter count or completion status filter is selected (no keyword, no genre).
+         */
+        private fun browseByFilterOnly(chapterFilter: ChapterCountFilter) {
+            searchJob?.cancel()
+            searchJob =
+                viewModelScope.launch {
+                    _state.update {
+                        it.copy(
+                            isLoading = true,
+                            error = null,
+                            hasSearched = true,
+                            currentPage = 1,
+                            canLoadMore = false,
+                        )
+                    }
+                    try {
+                        val rawStories = repository.getCompletedStories(page = 1)
+                        val filtered = applyLocalFilters(rawStories)
+                        _state.update {
+                            it.copy(
+                                results = filtered.toImmutableList(),
+                                isLoading = false,
+                                currentPage = 1,
+                                canLoadMore = rawStories.isNotEmpty() && chapterFilter == ChapterCountFilter.NONE,
+                                error = null,
+                            )
+                        }
+                    } catch (e: CancellationException) {
+                        throw e
                     } catch (e: Exception) {
                         _state.update {
                             it.copy(
                                 isLoading = false,
                                 hasSearched = true,
-                                error = "Lỗi lọc: ${e.localizedMessage ?: "Không thể kết nối"}",
+                                error = (e as? ScraperException)?.message ?: "Không thể tải danh sách truyện. Vui lòng thử lại.",
                             )
                         }
                     }
@@ -346,6 +387,10 @@ class SearchViewModel
                 } else if (genre != null) {
                     // Re-browse genre với completedOnly mới
                     browseByGenre(genre, _state.value.chapterFilter)
+                } else if (_state.value.isFilterActive) {
+                    browseByFilterOnly(_state.value.chapterFilter)
+                } else {
+                    clearFilter()
                 }
             }
         }
@@ -373,18 +418,22 @@ class SearchViewModel
                                 completedOnly = current.completedOnly,
                             )
                         _state.update {
+                            val merged = deduplicateStories(it.results + moreResults)
+                            val hasNewItems = merged.size > it.results.size
                             it.copy(
-                                results = deduplicateStories(it.results + moreResults).toImmutableList(),
+                                results = merged.toImmutableList(),
                                 isLoadingMore = false,
-                                currentPage = nextPage,
-                                canLoadMore = moreResults.isNotEmpty(),
+                                currentPage = if (hasNewItems) nextPage else it.currentPage,
+                                canLoadMore = moreResults.isNotEmpty() && hasNewItems,
                             )
                         }
                     } catch (e: Exception) {
+                        if (e is CancellationException) throw e
                         _state.update {
                             it.copy(
                                 isLoadingMore = false,
-                                error = "Lỗi tải thêm: ${e.localizedMessage ?: "Không thể kết nối"}",
+                                canLoadMore = false,
+                                error = (e as? ScraperException)?.message ?: "Không thể tải thêm truyện. Vui lòng thử lại.",
                             )
                         }
                     }

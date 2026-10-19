@@ -5,8 +5,10 @@ import androidx.lifecycle.viewModelScope
 import com.personal.apptruyen.data.model.Story
 import com.personal.apptruyen.data.repository.IDownloadRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
+import timber.log.Timber
 import javax.inject.Inject
 
 @HiltViewModel
@@ -27,6 +29,9 @@ class DownloadsViewModel
 
         private val _searchQuery = MutableStateFlow("")
         val searchQuery: StateFlow<String> = _searchQuery.asStateFlow()
+
+        private val _errorMessage = MutableStateFlow<String?>(null)
+        val errorMessage: StateFlow<String?> = _errorMessage.asStateFlow()
 
         val filteredStories: StateFlow<List<DownloadedStoryInfo>> =
             combine(_stories, _searchQuery) { stories, query ->
@@ -63,15 +68,29 @@ class DownloadsViewModel
             _searchQuery.value = query
         }
 
+        fun clearError() {
+            _errorMessage.value = null
+        }
+
         fun deleteDownloads(storyId: String) {
             viewModelScope.launch {
-                repository.deleteAllDownloads(storyId)
+                runCatching { repository.deleteAllDownloads(storyId) }
+                    .onFailure { e ->
+                        if (e is CancellationException) throw e
+                        Timber.e(e, "Failed to delete downloads for storyId=%s", storyId)
+                        _errorMessage.value = "Không xóa được các chương đã tải. Vui lòng thử lại."
+                    }
             }
         }
 
         fun deleteEntireStory(storyId: String) {
             viewModelScope.launch {
-                repository.deleteStory(storyId)
+                runCatching { repository.deleteStory(storyId) }
+                    .onFailure { e ->
+                        if (e is CancellationException) throw e
+                        Timber.e(e, "Failed to delete story for storyId=%s", storyId)
+                        _errorMessage.value = "Không xóa được truyện. Vui lòng thử lại."
+                    }
             }
         }
     }

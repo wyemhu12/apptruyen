@@ -6,8 +6,10 @@ import com.personal.apptruyen.data.local.DatabaseTransactionRunner
 import com.personal.apptruyen.data.local.ReadingProgressDao
 import com.personal.apptruyen.data.local.StoryDao
 import com.personal.apptruyen.data.local.entity.ChapterEntity
+import com.personal.apptruyen.data.local.entity.StoryEntity
 import com.personal.apptruyen.data.model.Chapter
 import com.personal.apptruyen.data.model.ChapterContentResult
+import com.personal.apptruyen.data.model.Story
 import com.personal.apptruyen.data.remote.ScraperException
 import com.personal.apptruyen.data.remote.StorySource
 import io.mockk.Runs
@@ -18,6 +20,7 @@ import io.mockk.every
 import io.mockk.just
 import io.mockk.mockk
 import io.mockk.mockkStatic
+import io.mockk.slot
 import io.mockk.unmockkStatic
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -63,7 +66,7 @@ class DownloadRepositoryTest {
         source = mockk(relaxed = true)
         every { source.baseUrl } returns "https://sstruyen.pics"
 
-        coEvery { chapterDao.saveChapterContent(any(), any(), any(), any()) } answers {
+        coEvery { chapterDao.saveChapterContent(any(), any(), any(), any(), any(), any()) } answers {
             persistedChapters.add(Triple(firstArg(), secondArg(), thirdArg()))
         }
 
@@ -241,8 +244,9 @@ class DownloadRepositoryTest {
             val emissions = downloadRepository.downloadChapters("s1", chapters).toList()
 
             assertEquals(750L, testScheduler.currentTime)
-            assertEquals(8, emissions.last().current)
+            assertEquals(7, emissions.last().current)
             assertEquals(1, emissions.last().errors)
+            assertEquals(8, emissions.last().processed)
 
             assertEquals(
                 listOf(
@@ -256,7 +260,7 @@ class DownloadRepositoryTest {
                 ),
                 persistedChapters,
             )
-            coVerify(exactly = 0) { chapterDao.saveChapterContent("s1", 3, any(), any()) }
+            coVerify(exactly = 0) { chapterDao.saveChapterContent("s1", 3, any(), any(), any(), any()) }
         }
 
     @Test
@@ -274,7 +278,7 @@ class DownloadRepositoryTest {
 
             assertTrue(caught != null)
             coVerify(exactly = 1) { source.getChapterContentWithTitle("https://sstruyen.pics/c1") }
-            coVerify(exactly = 0) { chapterDao.saveChapterContent(any(), any(), any(), any()) }
+            coVerify(exactly = 0) { chapterDao.saveChapterContent(any(), any(), any(), any(), any(), any()) }
         }
 
     @Test
@@ -299,7 +303,7 @@ class DownloadRepositoryTest {
             job.cancel()
             advanceUntilIdle()
 
-            coVerify(exactly = 0) { chapterDao.saveChapterContent(any(), any(), any(), any()) }
+            coVerify(exactly = 0) { chapterDao.saveChapterContent(any(), any(), any(), any(), any(), any()) }
         }
 
     @Test
@@ -330,7 +334,7 @@ class DownloadRepositoryTest {
                 coVerify(exactly = 1) { source.getChapterContentWithTitle("https://sstruyen.pics/c$num") }
             }
             assertEquals(listOf(Triple("s1", 1, "Nội dung 1")), persistedChapters)
-            coVerify(exactly = 1) { chapterDao.saveChapterContent(any(), any(), any(), any()) }
+            coVerify(exactly = 1) { chapterDao.saveChapterContent(any(), any(), any(), any(), any(), any()) }
             for (num in 5..8) {
                 coVerify(exactly = 0) { source.getChapterContentWithTitle("https://sstruyen.pics/c$num") }
             }
@@ -347,8 +351,9 @@ class DownloadRepositoryTest {
 
             val emissions = downloadRepository.downloadChapters("s1", chapters).toList()
 
-            assertEquals(12, emissions.last().current)
+            assertEquals(0, emissions.last().current)
             assertEquals(12, emissions.last().errors)
+            assertEquals(12, emissions.last().processed)
             for (num in 13..16) {
                 coVerify(exactly = 0) { source.getChapterContentWithTitle("https://sstruyen.pics/c$num") }
             }
@@ -375,5 +380,207 @@ class DownloadRepositoryTest {
             coVerify(exactly = 2) { chapterDao.getChaptersByNumbers("s1", any()) }
             assertEquals(1200, result.size)
             assertEquals((1..1200).toList(), result.map { it.chapterNumber })
+        }
+
+    @Test
+    fun `downloadChapters for wikidich downloads sequentially 1 chapter at a time with 15 to 20s delay between chapters`() =
+        runTest {
+            every { source.sourceId } returns "wikidich"
+            every { source.baseUrl } returns "https://wikicv.org"
+            val delays = ArrayDeque(listOf(15_000L, 20_000L, 17_500L))
+            downloadRepository.wikidichDelayProvider = { delays.removeFirst() }
+
+            val chapters =
+                (1..4).map { num ->
+                    Chapter("w1", num, "Chương $num", "https://wikicv.org/truyen/test/c$num")
+                }
+
+            val inFlight = AtomicInteger(0)
+            val maxInFlight = AtomicInteger(0)
+
+            coEvery { source.getChapterContentWithTitle(any()) } coAnswers {
+                val url = firstArg<String>()
+                val num = url.substringAfterLast("/c").toInt()
+                val current = inFlight.incrementAndGet()
+                maxInFlight.updateAndGet { maxOf(it, current) }
+                delay(10)
+                inFlight.decrementAndGet()
+                ChapterContentResult(content = "Nội dung $num", title = "Chương $num: Thực")
+            }
+
+            val startTime = testScheduler.currentTime
+            val emissions = downloadRepository.downloadChapters("w1", chapters).toList()
+            val elapsed = testScheduler.currentTime - startTime
+
+            assertEquals(1, maxInFlight.get(), "Wikidich must download 1 chapter at a time")
+            // 4 chapters -> 3 inter-chapter delays (15000 + 20000 + 17500 = 52500ms) + 4 * 10ms = 52540ms
+            assertEquals(52_540L, elapsed)
+            assertEquals(4, emissions.last().current)
+            assertEquals(0, emissions.last().errors)
+            assertEquals(4, persistedChapters.size)
+        }
+
+    @Test
+    fun `downloadChapters for wikidich fails fast without retry on Cloudflare HTTP 403 or 429 or 503`() =
+        runTest {
+            every { source.sourceId } returns "wikidich"
+            every { source.baseUrl } returns "https://wikicv.org"
+            downloadRepository.wikidichDelayProvider = { 15_000L }
+
+            val chapters =
+                (1..4).map { num ->
+                    Chapter("w1", num, "Chương $num", "https://wikicv.org/truyen/test/c$num")
+                }
+
+            coEvery { source.getChapterContentWithTitle("https://wikicv.org/truyen/test/c1") } returns
+                ChapterContentResult(content = "Nội dung 1", title = "Chương 1: Mở đầu")
+            coEvery { source.getChapterContentWithTitle("https://wikicv.org/truyen/test/c2") } throws
+                ScraperException.HttpException(429, "https://wikicv.org/truyen/test/c2")
+
+            var caughtHttp: ScraperException.HttpException? = null
+            try {
+                downloadRepository.downloadChapters("w1", chapters).toList()
+            } catch (e: ScraperException.HttpException) {
+                caughtHttp = e
+            }
+
+            assertTrue(caughtHttp != null)
+            assertEquals(429, caughtHttp?.statusCode)
+            // Chapter 1 succeeded once, Chapter 2 failed once WITHOUT retry, Chapters 3..4 never called
+            coVerify(exactly = 1) { source.getChapterContentWithTitle("https://wikicv.org/truyen/test/c1") }
+            coVerify(exactly = 1) { source.getChapterContentWithTitle("https://wikicv.org/truyen/test/c2") }
+            coVerify(exactly = 0) { source.getChapterContentWithTitle("https://wikicv.org/truyen/test/c3") }
+            coVerify(exactly = 0) { source.getChapterContentWithTitle("https://wikicv.org/truyen/test/c4") }
+            assertEquals(listOf(Triple("w1", 1, "Nội dung 1")), persistedChapters)
+        }
+
+    @Test
+    fun `downloadChapters for wikidich retries transient network error after WIKIDICH_RETRY_DELAY_MS`() =
+        runTest {
+            every { source.sourceId } returns "wikidich"
+            every { source.baseUrl } returns "https://wikicv.org"
+
+            val chapters = listOf(Chapter("w1", 1, "Chương 1", "https://wikicv.org/truyen/test/c1"))
+            var attempts = 0
+            coEvery { source.getChapterContentWithTitle("https://wikicv.org/truyen/test/c1") } coAnswers {
+                attempts++
+                if (attempts == 1) {
+                    throw ScraperException.NetworkException("Timeout", null)
+                }
+                ChapterContentResult(content = "Nội dung 1", title = "Chương 1: Mở đầu")
+            }
+
+            val startTime = testScheduler.currentTime
+            val emissions = downloadRepository.downloadChapters("w1", chapters).toList()
+            val elapsed = testScheduler.currentTime - startTime
+
+            assertEquals(2, attempts)
+            assertEquals(DownloadRepository.WIKIDICH_RETRY_DELAY_MS, elapsed)
+            assertEquals(0, emissions.last().errors)
+            assertEquals(1, persistedChapters.size)
+        }
+
+    @Test
+    fun `downloadChapters keeps batch size 4 and 250ms delay for non-wikidich sources`() =
+        runTest {
+            every { source.sourceId } returns "sstruyen"
+            every { source.baseUrl } returns "https://sstruyen.pics"
+
+            val chapters =
+                (1..8).map { num ->
+                    Chapter("s1", num, "Chương $num", "https://sstruyen.pics/c$num")
+                }
+
+            val inFlight = AtomicInteger(0)
+            val maxInFlight = AtomicInteger(0)
+
+            coEvery { source.getChapterContentWithTitle(any()) } coAnswers {
+                val current = inFlight.incrementAndGet()
+                maxInFlight.updateAndGet { maxOf(it, current) }
+                delay(10)
+                inFlight.decrementAndGet()
+                ChapterContentResult(content = "Nội dung", title = "Chương")
+            }
+
+            val startTime = testScheduler.currentTime
+            val emissions = downloadRepository.downloadChapters("s1", chapters).toList()
+            val elapsed = testScheduler.currentTime - startTime
+
+            assertEquals(4, maxInFlight.get(), "Non-wikidich source must keep batch size 4")
+            // 2 batches -> 1 inter-batch delay of 250ms + 2 * 10ms = 270ms
+            assertEquals(270L, elapsed)
+            assertEquals(8, emissions.last().current)
+            assertEquals(0, emissions.last().errors)
+        }
+
+    @Test
+    fun `downloadChapters passes chapter title and url to saveChapterContent`() =
+        runTest {
+            val chapters =
+                listOf(
+                    Chapter("s1", 1, "Chương 1", "https://sstruyen.pics/c1"),
+                )
+            coEvery { source.getChapterContentWithTitle("https://sstruyen.pics/c1") } returns
+                ChapterContentResult(content = "Nội dung 1", title = "Chương 1: Khởi đầu")
+
+            downloadRepository.downloadChapters("s1", chapters).toList()
+
+            coVerify(exactly = 1) {
+                chapterDao.saveChapterContent(
+                    storyId = "s1",
+                    chapterNumber = 1,
+                    content = "Nội dung 1",
+                    timestamp = any(),
+                    title = "Chương 1: Khởi đầu",
+                    url = "https://sstruyen.pics/c1",
+                )
+            }
+        }
+
+    @Test
+    fun `snapshotStoryMetadata guards zero totalChapters and base64 coverImageUrl`() =
+        runTest {
+            val storyId = "s1"
+            val storyUrl = "https://sstruyen.pics/truyen/s1"
+            val cachedEntity =
+                StoryEntity(
+                    id = storyId,
+                    slug = "s1",
+                    title = "Truyện 1",
+                    author = "Tác giả",
+                    genres = "Tiên Hiệp",
+                    description = "Mô tả",
+                    url = storyUrl,
+                    totalChapters = 500,
+                    coverImageUrl = "https://sstruyen.pics/cover-real.jpg",
+                    sourceId = "sstruyen",
+                    status = "Đang ra",
+                    storyReplacementsEnabled = true,
+                    storyCustomReplacements = "a=b",
+                )
+            coEvery { storyDao.getStoryById(storyId) } returns cachedEntity
+            coEvery { source.getStoryDetail(storyUrl) } returns
+                Story(
+                    id = storyId,
+                    slug = "s1",
+                    title = "Truyện 1 (Mới)",
+                    author = "Tác giả",
+                    genres = listOf("Tiên Hiệp"),
+                    description = "Mô tả mới",
+                    url = storyUrl,
+                    totalChapters = 0,
+                    coverImageUrl = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUg==",
+                    sourceId = "sstruyen",
+                    status = "Hoàn thành",
+                )
+            val savedSlot = slot<StoryEntity>()
+            coEvery { storyDao.insertStory(capture(savedSlot)) } just Runs
+
+            downloadRepository.snapshotStoryMetadata(storyId)
+
+            assertEquals(500, savedSlot.captured.totalChapters)
+            assertEquals("https://sstruyen.pics/cover-real.jpg", savedSlot.captured.coverImageUrl)
+            assertTrue(savedSlot.captured.storyReplacementsEnabled)
+            assertEquals("a=b", savedSlot.captured.storyCustomReplacements)
         }
 }

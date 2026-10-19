@@ -20,31 +20,35 @@ Bạn chỉ được dùng WebFetch với danh sách domain sau: truyencom.com, 
 
 ## 3. Nguyên Tắc Thẩm Định Độc Lập (BẮT BUỘC, áp dụng cho MỌI lượt)
 
-- **Giả định ban đầu**: coi mỗi Revision của plan có **ít nhất 1 lỗi ẩn** cho đến khi bạn tự tay chứng minh ngược lại bằng `[SRC]`, `[CMD]` hoặc `[ADV]` trên source code thật.
-- **Mỗi lượt là một cuộc thẩm định độc lập từ đầu**: bảng kiểm chứng lỗi cũ chỉ là **điều kiện cần**, KHÔNG phải điều kiện đủ để kết luận `APPROVED`. Sau khi kiểm tra các lỗi cũ đã được sửa, bạn BẮT BUỘC phải đọc lại toàn bộ `## Technical Plan` với con mắt mới để tìm: (1) regression do chính bản sửa tạo ra, (2) lỗi bị bỏ sót ở các lượt trước, (3) mâu thuẫn nội tại giữa các phần của plan.
-- **Chống hiệu ứng mỏ neo (Anti-Anchoring)**: việc `@planner` sửa đủ N lỗi của Run trước KHÔNG có nghĩa là Run hiện tại mặc định `APPROVED`. Không lấy lời văn của plan làm bằng chứng `[SRC]`.
-- **Giọng văn kỹ thuật, trung lập**: tuyệt đối tránh các từ tán dương cảm tính (*"xuất sắc"*, *"hoàn hảo"*, *"tuyệt vời"*, *"triệt để"*, *"toàn diện"*).
+Nhiệm vụ của bạn là **tìm lỗi**, không phải xác nhận kế hoạch đã ổn.
+
+- **Không kế thừa kết luận của Audit Run trước** (của Claude Code CLI hay của `@reviewer`). Kết luận cũ chỉ là danh sách việc cần kiểm lại, không phải bằng chứng.
+- **Mỗi lỗi cũ phải được kiểm lại trên mã nguồn thật**: một lỗi chỉ được ghi `ĐÃ SỬA` khi có `[SRC]` trỏ vào code thật hoặc `[CMD]` cho thấy phần sửa trong plan khớp với code hiện tại. Plan chỉ viết lại đoạn đó là chưa đủ. Nếu chỉ sửa được một phần thì ghi `SỬA MỘT PHẦN` và nêu phần còn thiếu; nếu chưa sửa thì ghi `CHƯA SỬA`.
+- **Săn lỗi mới là bắt buộc**: đọc lại toàn bộ `## Technical Plan` như lần đầu, đặc biệt là các phần vừa sửa ở Revision mới, để tìm: (1) regression do chính bản sửa tạo ra, (2) lỗi bị bỏ sót ở các lượt trước, (3) mâu thuẫn nội tại giữa các phần của plan. Đối chiếu mọi giả định của plan về file, hàm, chữ ký, giá trị trả về, cấu hình hoặc schema Room/DataStore với code thật.
+- **Luật bằng chứng bổ sung**: `[SRC]` chỉ được trỏ vào source code, schema hoặc file cấu hình gốc kèm `file:line` đã đọc. Mọi trích dẫn trỏ vào file kế hoạch chỉ mô tả ý định của plan; kết luận PASS chỉ dựa vào trích dẫn plan phải ghi `UNVERIFIED`. Với mỗi file `[MODIFY]` mà plan dựa vào, bắt buộc đọc file đó và ghi lại chỗ khớp hoặc lệch.
+- **Giọng văn kỹ thuật, trung lập**: tuyệt đối không dùng các từ ngữ tuyệt đối hay lời khen cảm tính (*100%*, *triệt để*, *hoàn hảo*, *tuyệt đối*, *xuất sắc*, *mẫu mực*, *chuẩn công nghiệp*, *toàn diện*, *tuyệt vời*) để mô tả plan hoặc phần sửa.
 
 ## 4. Quy Trình Thẩm Định
 
 1. **Đọc kế hoạch**: đọc toàn bộ `{{PLAN_FILE}}`, tập trung vào `## Technical Plan`. TUYỆT ĐỐI KHÔNG sửa, xóa hay viết lại bất kỳ nội dung nào trong `## Technical Plan` hoặc header `Trạng thái`. Mọi thay đổi ngoài phần append sẽ bị script coi là TAMPERED và hoàn tác toàn bộ.
-2. **Xác định số Audit Run**: đếm các tiêu đề `### Audit Run X` trong `## Audit History`, đặt tiêu đề mới là `### Audit Run [X+1]`. Nếu đã có Run trước, kiểm chứng từng lỗi cũ đã được khắc phục trong `## Technical Plan` chưa. Khi nhắc kết luận của Run cũ thì viết CHANGES_REQUESTED không dùng ngoặc vuông để tránh nhầm lẫn parser.
-3. **Khảo sát thực tế**: dùng Read/Grep/Glob soi source thật trong repo, kiểm tra file/hàm/import mà plan dựa vào có tồn tại không. Tool ghi duy nhất được cấp phép là Edit trên file `{{PLAN_FILE}}`.
+2. **Xác định số Audit Run**: đếm các tiêu đề `### Audit Run X` trong `## Audit History`, đặt tiêu đề mới là `### Audit Run [X+1]`. Nếu đã có Run trước, lập danh sách lỗi cũ cần kiểm lại (chỉ để kiểm lại, không kế thừa kết luận). Khi nhắc kết luận của Run cũ thì viết CHANGES_REQUESTED không dùng ngoặc vuông để tránh nhầm lẫn parser.
+3. **Khảo sát thực tế**: dùng Read/Grep/Glob soi source thật trong repo, kiểm tra file/hàm/import mà plan dựa vào có tồn tại không và đối chiếu từng file `[MODIFY]`. Tool ghi duy nhất được cấp phép là Edit trên file `{{PLAN_FILE}}`.
 4. **Cấu trúc nhận xét trong `### Audit Run [X+1]`** (append đúng một tiêu đề vào cuối file plan, viết tiếng Việt):
    - **Reviewer**: Claude Code CLI (tên model)
    - **Ngày**: YYYY-MM-DD
    - **Đối tượng**: số Revision hiện tại của Technical Plan
-   - **Kiểm chứng lỗi cũ**: bảng các điểm đã/chưa khắc phục so với Run trước
-   - **Mental Simulation Matrix (S1–S6 + Domain)**: PASS/FAIL/N/A, loại bằng chứng, chi tiết
+   - **Kiểm Chứng Lỗi Cũ**: bảng từng mã lỗi của các Run trước với trạng thái `ĐÃ SỬA` / `SỬA MỘT PHẦN` / `CHƯA SỬA`, kèm `[SRC]`/`[CMD]` trên code thật
+   - **Phát Hiện Mới (Fresh Findings & Regression Check)**: các lỗi mới tìm được ở lượt này độc lập với bảng lỗi cũ, phân loại theo Severity Rubric
+   - **Mental Simulation Matrix (S1–S6 + Domain)**: PASS/FAIL/UNVERIFIED/N/A, loại bằng chứng, chi tiết
    - **Adversarial Timelines**: bắt buộc cho S3, S5 và mọi cơ chế đồng thời/bất đồng bộ
    - **Commands Executed**: các lệnh được trích dẫn từ evidence.md
-   - **Phát Hiện Mới (Fresh Findings & Regression Check)**: liệt kê các điểm phát hiện mới độc lập với bảng lỗi cũ. Nếu không tìm thấy lỗi mới nào (`0 BLOCKER, 0 MAJOR`), BẮT BUỘC phải có tiểu mục **Các Tấn Công Đã Thử (Attempted Attack Vectors)** liệt kê **ít nhất 3 kịch bản phản biện cụ thể** đã thử để đánh sập thiết kế mới kèm dẫn chứng `[SRC]`/`[CMD]` vì sao thiết kế đứng vững.
+   - **Các Tấn Công Đã Thử (Attempted Attack Vectors)**: nếu cấp phê duyệt mà mục Phát Hiện Mới không có lỗi nào (kể cả `[MINOR]`), BẮT BUỘC liệt kê ít nhất 3 rủi ro/kịch bản phản biện cụ thể đã thử để làm vỡ thiết kế mới nhưng không thành, mỗi rủi ro kèm bằng chứng `[SRC]` code thật hoặc `[CMD]`.
    - **Phân loại lỗi**:
      - `[BLOCKER]`: vi phạm kiến trúc/layer, công nghệ cấm, mất dữ liệu, lỗ hổng bảo mật.
      - `[MAJOR]`: thiếu unit test/Test Contract, sót edge case nghiêm trọng, UI text không phải tiếng Việt, thiếu cập nhật docs, kịch bản S1–S5 bị UNVERIFIED.
      - `[MINOR]`: style, đặt tên, tối ưu nhỏ, không chặn plan.
 5. **Quy tắc cấp thẻ**:
    - Còn `[BLOCKER]` hoặc `[MAJOR]` hoặc bất kỳ kịch bản S1–S5 nào `UNVERIFIED` → kết luận `[CHANGES_REQUESTED]` ở dòng kết luận cuối. KHÔNG ghi thẻ approve (nếu ghi kèm thẻ, script coi là TAMPERED và hoàn tác).
-   - Đạt chuẩn (chỉ còn `[MINOR]` hoặc không còn lỗi, đã hoàn thành tối thiểu 3 kịch bản trong **Các Tấn Công Đã Thử**) → kết luận APPROVED và ghi đúng thẻ
+   - Đạt chuẩn (chỉ còn `[MINOR]` hoặc không còn lỗi, và nếu không có Phát Hiện Mới nào kể cả `[MINOR]` thì đã hoàn thành tối thiểu 3 kịch bản trong **Các Tấn Công Đã Thử**) → kết luận APPROVED và ghi đúng thẻ
      `[PLAN_APPROVED]`
      ở **DÒNG CUỐI CÙNG CỦA FILE KẾ HOẠCH** (Code Freeze Guard chỉ mở khóa khi thẻ nằm ở dòng cuối).

@@ -1,6 +1,7 @@
 package com.personal.apptruyen.ui.reader
 
 import androidx.compose.animation.*
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -11,7 +12,6 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.personal.apptruyen.ui.theme.*
@@ -279,18 +279,7 @@ internal fun ReaderSettingsPanel(
                                 ReaderViewModel.ReaderTheme.DARK -> "Tối"
                                 ReaderViewModel.ReaderTheme.SEPIA -> "Sepia"
                             }
-                        val previewBg =
-                            when (t) {
-                                ReaderViewModel.ReaderTheme.LIGHT -> Color.White
-                                ReaderViewModel.ReaderTheme.DARK -> Color(0xFF1C1B1F)
-                                ReaderViewModel.ReaderTheme.SEPIA -> SepiaBackground
-                            }
-                        val previewText =
-                            when (t) {
-                                ReaderViewModel.ReaderTheme.LIGHT -> Color(0xFF1C1B1F)
-                                ReaderViewModel.ReaderTheme.DARK -> Color(0xFFE6E1E5)
-                                ReaderViewModel.ReaderTheme.SEPIA -> SepiaText
-                            }
+                        val previewColors = rememberReaderThemeColors(t)
                         val isSelected = theme == t
 
                         Surface(
@@ -300,12 +289,10 @@ internal fun ReaderSettingsPanel(
                                     .weight(1f)
                                     .height(64.dp),
                             shape = RoundedCornerShape(14.dp),
-                            color = previewBg,
+                            color = previewColors.backgroundColor,
                             border =
                                 if (isSelected) {
-                                    ButtonDefaults.outlinedButtonBorder.copy(
-                                        width = 2.dp,
-                                    )
+                                    BorderStroke(2.dp, previewColors.accentColor)
                                 } else {
                                     null
                                 },
@@ -316,12 +303,12 @@ internal fun ReaderSettingsPanel(
                                     Text(
                                         "Aa",
                                         style = MaterialTheme.typography.titleMedium,
-                                        color = previewText,
+                                        color = previewColors.textColor,
                                     )
                                     Text(
                                         name,
                                         style = MaterialTheme.typography.labelSmall,
-                                        color = previewText.copy(alpha = 0.7f),
+                                        color = previewColors.textColor.copy(alpha = 0.7f),
                                     )
                                 }
                             }

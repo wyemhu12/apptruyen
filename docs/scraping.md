@@ -1,6 +1,6 @@
 # Hướng dẫn Scraping
 
-> **Cập nhật lần cuối:** 2026-10-14 19:40
+> **Cập nhật lần cuối:** 2026-10-19 04:20
 
 ## Nguồn hoạt động hiện tại
 
@@ -80,6 +80,7 @@ Trang web Tàng Thư Viện mới sử dụng React/Next.js (App Router). Dữ l
 - Hỗ trợ fallback đổi URL cũ (`truyen.tangthuvien.vn/doc-truyen/{slug}`) thành URL mới trong `StoryDetail` và `ChapterContent`.
 - **Chú ý prefix `#`**: Trang web TTV hiển thị title chương dạng `#8 Chương 8: Tên chương`. Regex `TITLE_HASH_PREFIX = ^#\d+\s+` được dùng để strip prefix này khỏi cả title và paragraph content.
 - **Số chương trong danh sách**: Hàm `enrichWithChapterCounts()` fetch detail page song song (batch 5, timeout 7s, max 10 stories) để bổ sung.
+- **Giải mã ảnh bìa Next.js & Kiểm thử `MockWebServer`**: Thuộc tính `@VisibleForTesting internal var customBaseUrl: String?` cho phép ghi đè `baseUrl` trong `TangThuVienScraperTest`; ảnh bìa qua proxy `/_next/image?url=` được giải mã bằng `contains("/_next/image?url=")` và chuẩn hóa sang HTTPS qua `validateCoverUrl`.
 
 ---
 
@@ -129,32 +130,47 @@ Nguồn truyện hỗ trợ đọc trực tuyến, tải offline tốc độ cao
 - URL gốc: `https://truyenfull.today`
 - `TruyenFullScraper.kt` đã bị xóa.
 
+### ~~LacaTruyen (lacatruyen.buzz)~~ — ĐÃ GỠ BỎ (2026-10-19)
+- `CryptoJS.kt` đã bị xóa; tài liệu `docs/scraping_lacatruyen_decryption.md` được giữ làm tư liệu lịch sử.
+
 ### ~~MeTruyenChu (metruyenchu.com.vn)~~ — ĐÃ NGỪNG HOẠT ĐỘNG (2026-05-30)
 
 ---
 
-## Rate Limiting (chung)
+## Rate Limiting, Cache TTL & DNS-over-HTTPS (DoH)
 
-- Delay 200-500ms giữa mỗi request khi tải hàng loạt
-- Retry 3 lần nếu request fail (exponential backoff: 1s, 2s, 4s)
-- User-Agent giả lập Chrome Mobile
-- Smart HTTP caching: ETag + Last-Modified → If-None-Match/If-Modified-Since → 304 handling
+- **Nguồn thông thường (`sstruyen`, `tangthuvien`)**:
+  - Tải song song theo lô `DOWNLOAD_BATCH_SIZE = 4` chương/lô, thời gian chờ cơ sở `250ms` giữa các lô (nhân đôi lên tối đa `3000ms` khi có lỗi).
+- **Nguồn Wikidich (`wikidich` / `wikicv.org`)**:
+  - Do máy chủ Wikidich và Cloudflare WAF áp dụng giới hạn tốc độ nghiêm ngặt theo IP và session `express.sid`, `DownloadRepository` tự động chuyển sang tải tuần tự từng chương một (`WIKIDICH_BATCH_SIZE = 1`) với thời gian nghỉ ngẫu nhiên **`15–20 giây/chương`** (`WIKIDICH_MIN_DELAY_MS = 15_000L`, `WIKIDICH_MAX_DELAY_MS = 20_000L`).
+  - Khi gặp lỗi mạng tạm thời, thời gian chờ trước khi thử lại là `5_000ms` (`WIKIDICH_RETRY_DELAY_MS`).
+  - **Fail-Fast chống khóa IP**: Nếu gặp mã HTTP `403`, `429`, hoặc `503` (Cloudflare chặn/rate-limit), dừng ngay lập tức mà không retry và phát thông báo tiếng Việt trên `DownloadService`.
+  - Giữa các trang AJAX danh sách chương (`getRemainingChapters`), tự động nghỉ `crawlDelayMs` (`300ms`).
+- **DNS-over-HTTPS (`ResilientDohDns`)**:
+  - Gắn trực tiếp vào `OkHttpClient` (`AppModule`) để vượt qua tường lửa DNS nội bộ (Pi-hole, FortiGate, Cisco Umbrella...) trên mạng WiFi công ty thường chặn các tên miền giải trí (`wikicv.org`, `sstruyen.pics`, `tangthuvien.org`).
+  - Phân giải tên miền qua HTTPS cổng 443 bằng JSON DoH của Cloudflare (`https://1.1.1.1/dns-query`, `https://1.0.0.1/dns-query`) và Google (`https://8.8.8.8/resolve`), lọc bỏ IP sinkhole/bogon (`0.0.0.0`, `127.0.0.1`, LAN...), bảo toàn `hostname` cho TLS SNI (`InetAddress.getByAddress(hostname, rawBytes)`), cache TTL 10 phút và tự động fallback về `Dns.SYSTEM`.
+- **Smart HTTP caching & Cache TTL (`BaseScraper`)**:
+  - `CacheEntry` lưu `timestamp = nowMs()` bắt buộc và áp dụng `CACHE_TTL_MS = 10 * 60 * 1000L` (10 phút) kết hợp giới hạn `MAX_CACHE_SIZE = 100` và ETag / `Last-Modified` (`If-None-Match` / `If-Modified-Since` → `304 Not Modified`).
+- **Chuẩn hóa HTTPS (`usesCleartextTraffic="false"`)**:
+  - Mọi URL ảnh bìa và URL truyện `http://` (trừ `http://localhost` và `http://127.0.0.1` phục vụ `MockWebServer`) đều được tự động nâng cấp lên `https://` tại `BaseScraper.validateCoverUrl`, `WikidichScraper.fixUrl`, `StoryRepository.resolveSafeCoverUrl` và `StoryEntity.toDomain()`.
 
 ## WebViewContentLoader
 
-- Allowed domains: `wikicv.org`, `wikicv.net`, `tangthuvien.org`, `sstruyen.vn`
+- Allowed domains: `wikicv.org`, `wikicv.net`, `tangthuvien.org`, `truyen.tangthuvien.vn`, `sstruyen.pics`, `api.sstruyen.pics`, `file.sstruyen.pics`, `sstruyen.vn`
+- Host validation: `WebViewContentLoader.isAllowedDomain(host, allowedDomains)` kiểm tra khớp chính xác `normalizedHost == domain` hoặc subdomain có dấu chấm `normalizedHost.endsWith(".$domain")` (chặn tên miền giả mạo kiểu `evilwikicv.org`)
+- Lifecycle & Cancellation: tự động `stopLoading()` và `destroy()` trên Main thread (`mainHandler`) cả khi timeout lẫn khi coroutine bị hủy (`finally` của `withTimeoutOrNull`)
 - Timeout: 15s
 - JS selectors: `#chapter-c`, `#chapter-content`, `.chapter-c`, `.chapter-content`, `#content`, `.truyen-content`, `#js-read__content`, `div.text-justify`
 - Block images (`blockNetworkImage = true`) để tải nhanh hơn
-- URL origin validation: chỉ cho phép domains trong `ALLOWED_DOMAINS`
 
 ## Xử lý lỗi
 
 | Lỗi | Xử lý |
 | --- | --- |
 | `LoginRequiredException` | Nguồn yêu cầu đăng nhập (Wikidich), hiển thị banner tiếng Việt |
+| `HttpException(403/429/503)` | Với Wikidich: dừng tải ngay lập tức (Fail-Fast, không retry) để tránh bị khóa IP dài hạn, báo tiếng Việt trên thông báo tải |
 | `CircuitOpenException` | Nguồn tạm đóng do lỗi liên tiếp, phục hồi sau cooldown |
-| Timeout | Retry 3 lần, tăng timeout |
+| Timeout / 5xx / 429 | Retry tối đa 3 lần qua `BaseScraper.fetchDocumentWithRetry` (`isRetryableScraperException`), không retry lỗi 4xx vĩnh viễn (`404`, `403`, `401`) hoặc `ParseException` |
 | 404 | Bỏ qua chapter, log warning |
 | HTML rỗng | Thử fallback selectors → WebView |
 | Encoding | Force UTF-8 |

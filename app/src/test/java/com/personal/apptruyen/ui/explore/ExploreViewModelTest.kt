@@ -121,4 +121,48 @@ class ExploreViewModelTest {
             viewModel.dismissLoginPrompt("wikidich")
             verify { authRepository.clearLoginRequired("wikidich") }
         }
+
+    @Test
+    fun `loadMore sets canLoadMore to false when duplicate stories returned or exception thrown`() =
+        runTest {
+            coEvery { repository.getCompletedStories(1) } returns listOf(sampleStory)
+            // Page 2 returns only duplicate story
+            coEvery { repository.getCompletedStories(2) } returns listOf(sampleStory)
+
+            viewModel = ExploreViewModel(repository, authRepository)
+            advanceUntilIdle()
+            assertTrue(viewModel.state.value.canLoadMore)
+
+            viewModel.loadMore()
+            advanceUntilIdle()
+
+            assertEquals(1, viewModel.state.value.stories.size)
+            assertFalse(viewModel.state.value.canLoadMore)
+            assertEquals(1, viewModel.state.value.currentPage)
+
+            // Now test exception on loadMore
+            val secondStory = sampleStory.copy(id = "explore.2", title = "Truyện Full 2")
+            coEvery { repository.getCompletedStories(2) } returns listOf(secondStory)
+            coEvery { repository.getCompletedStories(3) } throws RuntimeException("Socket timeout")
+
+            viewModel.refresh()
+            advanceUntilIdle()
+            viewModel.loadMore() // page 2 succeeds
+            advanceUntilIdle()
+            assertTrue(viewModel.state.value.canLoadMore)
+
+            viewModel.loadMore() // page 3 throws
+            advanceUntilIdle()
+            assertFalse(viewModel.state.value.isLoadingMore)
+            assertFalse(viewModel.state.value.canLoadMore)
+
+            // Verify initial load error is Vietnamese
+            coEvery { repository.getCompletedStories(1) } throws RuntimeException("Raw English Failure")
+            viewModel.refresh()
+            advanceUntilIdle()
+            assertFalse(
+                viewModel.state.value.error
+                    ?.contains("Raw English Failure") == true,
+            )
+        }
 }

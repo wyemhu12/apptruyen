@@ -35,7 +35,10 @@
 
 # --- Jsoup ---
 -keeppackagenames org.jsoup.nodes
--keep class org.jsoup.** { *; }
+-keep class org.jsoup.nodes.** { *; }
+-keep class org.jsoup.select.** { *; }
+-keep class org.jsoup.parser.** { *; }
+-dontwarn org.jsoup.**
 -dontwarn com.google.re2j.Matcher
 -dontwarn com.google.re2j.Pattern
 
@@ -56,9 +59,9 @@
 # --- Compose ---
 -dontwarn androidx.compose.**
 
-# --- Keep data classes used by Room entities ---
+# --- Keep data classes used by Room entities & kotlinx.serialization ---
 -keep class com.personal.apptruyen.data.local.entity.** { *; }
--keep class com.personal.apptruyen.data.model.** { *; }
+-keep @kotlinx.serialization.Serializable class com.personal.apptruyen.data.model.** { *; }
 
 # --- Kotlinx Serialization ---
 -keepattributes *Annotation*, InnerClasses

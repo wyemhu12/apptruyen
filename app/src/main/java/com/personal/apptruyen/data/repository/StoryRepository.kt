@@ -1,9 +1,9 @@
 package com.personal.apptruyen.data.repository
 
-import android.util.Log
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import com.personal.apptruyen.data.local.ChapterDao
+import com.personal.apptruyen.data.local.DatabaseTransactionRunner
 import com.personal.apptruyen.data.local.SettingsKeys
 import com.personal.apptruyen.data.local.StoryDao
 import com.personal.apptruyen.data.local.entity.ChapterEntity
@@ -34,6 +34,7 @@ import kotlinx.coroutines.supervisorScope
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withTimeoutOrNull
+import timber.log.Timber
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -48,6 +49,7 @@ class StoryRepository
         private val dataStore: DataStore<Preferences>,
         private val circuitBreaker: ScraperCircuitBreaker,
         private val authRepository: ISourceAuthRepository,
+        private val transactionRunner: DatabaseTransactionRunner,
     ) : IStoryRepository {
         // ---- Genre cache (in-memory, 1-hour TTL, keyed by active source IDs) ----
         private var cachedGenres: List<Genre>? = null
@@ -77,7 +79,8 @@ class StoryRepository
                         ?.split(",")
                         ?.filter { it.isNotBlank() }
                         ?.toSet()
-                } catch (_: Exception) {
+                } catch (e: Exception) {
+                    if (e is CancellationException) throw e
                     null
                 } ?: return sources
             return sources.filter { it.sourceId in enabledIds }.ifEmpty { sources }.toSet()
@@ -152,23 +155,23 @@ class StoryRepository
                                         }
                                     pages.awaitAll().flatten()
                                 }?.also {
-                                    Log.d("StoryRepo", "${source.sourceName} completedStories returned ${it.size} results")
+                                    Timber.tag("StoryRepo").d("%s completedStories returned %d results", source.sourceName, it.size)
                                     circuitBreaker.recordSuccess(source.sourceId)
                                     if (it.isNotEmpty()) {
                                         authRepository.clearLoginRequired(source.sourceId)
                                     }
                                 } ?: run {
-                                    Log.d("StoryRepo", "${source.sourceName} completedStories timeout")
+                                    Timber.tag("StoryRepo").d("%s completedStories timeout", source.sourceName)
                                     circuitBreaker.recordFailure(source.sourceId)
                                     emptyList()
                                 }
                             } catch (e: Exception) {
                                 if (e is CancellationException) throw e
                                 if (e is ScraperException.LoginRequiredException) {
-                                    Log.w("StoryRepo", "${source.sourceName} completedStories requires login", e)
+                                    Timber.tag("StoryRepo").w(e, "%s completedStories requires login", source.sourceName)
                                     authRepository.markLoginRequired(source.sourceId)
                                 } else {
-                                    Log.d("StoryRepo", "${source.sourceName} completedStories failed", e)
+                                    Timber.tag("StoryRepo").d(e, "%s completedStories failed", source.sourceName)
                                     circuitBreaker.recordFailure(source.sourceId)
                                 }
                                 emptyList()
@@ -223,21 +226,26 @@ class StoryRepository
                                             }
                                         pages.awaitAll().flatten()
                                     }?.also {
-                                        Log.d("StoryRepo", "${source.sourceName} getStoriesByGenre($genreSlug) returned ${it.size} results")
+                                        Timber.tag("StoryRepo").d(
+                                            "%s getStoriesByGenre(%s) returned %d results",
+                                            source.sourceName,
+                                            genreSlug,
+                                            it.size,
+                                        )
                                         if (it.isNotEmpty()) {
                                             authRepository.clearLoginRequired(source.sourceId)
                                         }
                                     } ?: run {
-                                        Log.d("StoryRepo", "${source.sourceName} getStoriesByGenre timeout")
+                                        Timber.tag("StoryRepo").d("%s getStoriesByGenre timeout", source.sourceName)
                                         emptyList()
                                     }
                                 } catch (e: Exception) {
                                     if (e is CancellationException) throw e
                                     if (e is ScraperException.LoginRequiredException) {
-                                        Log.w("StoryRepo", "${source.sourceName} getStoriesByGenre requires login", e)
+                                        Timber.tag("StoryRepo").w(e, "%s getStoriesByGenre requires login", source.sourceName)
                                         authRepository.markLoginRequired(source.sourceId)
                                     } else {
-                                        Log.d("StoryRepo", "${source.sourceName} getStoriesByGenre failed", e)
+                                        Timber.tag("StoryRepo").d(e, "%s getStoriesByGenre failed", source.sourceName)
                                     }
                                     emptyList()
                                 }
@@ -275,15 +283,15 @@ class StoryRepository
                                     try {
                                         withTimeoutOrNull(perSourceTimeoutMs) {
                                             val result = source.getGenreList()
-                                            Log.d("StoryRepo", "${source.sourceName} returned ${result.size} genres")
+                                            Timber.tag("StoryRepo").d("%s returned %d genres", source.sourceName, result.size)
                                             result
                                         } ?: run {
-                                            Log.d("StoryRepo", "${source.sourceName} getGenreList timeout")
+                                            Timber.tag("StoryRepo").d("%s getGenreList timeout", source.sourceName)
                                             emptyList()
                                         }
                                     } catch (e: Exception) {
                                         if (e is CancellationException) throw e
-                                        Log.w("StoryRepo", "${source.sourceName} getGenreList failed", e)
+                                        Timber.tag("StoryRepo").w(e, "%s getGenreList failed", source.sourceName)
                                         emptyList()
                                     }
                                 }
@@ -297,7 +305,7 @@ class StoryRepository
                         .sortedBy { it.name }
                 }
 
-            Log.d("StoryRepo", "Total genres after merge: ${genres.size}")
+            Timber.tag("StoryRepo").d("Total genres after merge: %d", genres.size)
             cachedGenres = genres
             cachedGenreSourceIds = activeIds
             cachedGenresTimestamp = now
@@ -321,18 +329,21 @@ class StoryRepository
                                 val timeoutMs = timeoutFor(source)
                                 withTimeoutOrNull(timeoutMs) {
                                     val result = source.search(keyword, completedOnly)
-                                    Log.d(
-                                        "StoryRepo",
-                                        "${source.sourceName} search '$keyword' returned ${result.size} results",
+                                    Timber.tag("StoryRepo").d(
+                                        "%s search '%s' returned %d results",
+                                        source.sourceName,
+                                        keyword,
+                                        result.size,
                                     )
                                     result
                                 }?.also {
                                     circuitBreaker.recordSuccess(source.sourceId)
                                     authRepository.clearLoginRequired(source.sourceId)
                                 } ?: run {
-                                    Log.w(
-                                        "StoryRepo",
-                                        "${source.sourceName} search timeout after ${timeoutMs}ms",
+                                    Timber.tag("StoryRepo").w(
+                                        "%s search timeout after %dms",
+                                        source.sourceName,
+                                        timeoutMs,
                                     )
                                     circuitBreaker.recordFailure(source.sourceId)
                                     emptyList()
@@ -340,10 +351,10 @@ class StoryRepository
                             } catch (e: Exception) {
                                 if (e is CancellationException) throw e
                                 if (e is ScraperException.LoginRequiredException) {
-                                    Log.w("StoryRepo", "${source.sourceName} search requires login", e)
+                                    Timber.tag("StoryRepo").w(e, "%s search requires login", source.sourceName)
                                     authRepository.markLoginRequired(source.sourceId)
                                 } else {
-                                    Log.w("StoryRepo", "${source.sourceName} search failed", e)
+                                    Timber.tag("StoryRepo").w(e, "%s search failed", source.sourceName)
                                     circuitBreaker.recordFailure(source.sourceId)
                                 }
                                 emptyList()
@@ -357,9 +368,8 @@ class StoryRepository
         // ---- Story Detail ----
 
         override suspend fun getStoryDetail(storyUrl: String): Story {
-            // Try local cache first (offline-first)
-            val storyId = extractStoryId(storyUrl)
-            val cached = if (storyId != null) storyDao.getStoryById(storyId) else null
+            // Try local cache first (offline-first) via URL, canonical sourceId_slug, or same-source legacy slug
+            val cached = findCachedStory(storyUrl)
 
             if (cached != null) {
                 // Fire-and-forget background refresh — uses app-scoped coroutine
@@ -375,18 +385,10 @@ class StoryRepository
                             } else {
                                 fresh.totalChapters
                             }
-                        val cachedCoverClean =
-                            if (
-                                cached.coverImageUrl.contains("data:", ignoreCase = true) ||
-                                cached.coverImageUrl.contains("base64", ignoreCase = true)
-                            ) {
-                                ""
-                            } else {
-                                cached.coverImageUrl
-                            }
-                        val safeCoverImageUrl = fresh.coverImageUrl.ifBlank { cachedCoverClean }
+                        val safeCoverImageUrl = resolveSafeCoverUrl(fresh.coverImageUrl, cached.coverImageUrl)
                         val entity =
                             fresh.toEntity().copy(
+                                id = cached.id,
                                 coverImageUrl = safeCoverImageUrl,
                                 isInLibrary = cached.isInLibrary,
                                 addedTimestamp = cached.addedTimestamp,
@@ -396,7 +398,8 @@ class StoryRepository
                             )
                         storyDao.insertStory(entity)
                     } catch (e: Exception) {
-                        Log.d("StoryRepo", "Background refresh failed", e)
+                        if (e is CancellationException) throw e
+                        Timber.tag("StoryRepo").d(e, "Background refresh failed")
                     }
                 }
                 val domainStory = cached.toDomain()
@@ -413,22 +416,61 @@ class StoryRepository
             // No cache — fetch from web (blocking)
             val source = sourceFor(storyUrl)
             val story = source.getStoryDetail(storyUrl)
-            val existingEntity = storyDao.getStoryById(story.id)
+            val existingEntity =
+                storyDao.getStoryById(story.id)?.takeIf { it.id.isNotBlank() }
+                    ?: storyDao.getStoryById(story.slug)?.takeIf {
+                        it.id.isNotBlank() && it.sourceId == story.sourceId
+                    }
+            val resolvedId = existingEntity?.id ?: story.id
+            val resolvedStory = story.copy(id = resolvedId)
             val entity =
-                story.toEntity().let { e ->
+                resolvedStory.toEntity().let { e ->
                     if (existingEntity != null) {
                         e.copy(
+                            totalChapters = resolveSafeTotalChapters(resolvedStory.totalChapters, existingEntity.totalChapters),
+                            coverImageUrl = resolveSafeCoverUrl(resolvedStory.coverImageUrl, existingEntity.coverImageUrl),
                             isInLibrary = existingEntity.isInLibrary,
                             addedTimestamp = existingEntity.addedTimestamp,
                             storyReplacementsEnabled = existingEntity.storyReplacementsEnabled,
                             storyCustomReplacements = existingEntity.storyCustomReplacements,
                         )
                     } else {
-                        e
+                        e.copy(
+                            totalChapters = resolveSafeTotalChapters(resolvedStory.totalChapters, 0),
+                            coverImageUrl = resolveSafeCoverUrl(resolvedStory.coverImageUrl, null),
+                        )
                     }
                 }
             storyDao.insertStory(entity)
-            return story
+            return resolvedStory
+        }
+
+        private suspend fun findCachedStory(storyUrl: String): StoryEntity? {
+            val normalizedUrl = storyUrl.trim()
+            storyDao.getStoryByUrl(normalizedUrl)?.takeIf { it.id.isNotBlank() }?.let { return it }
+            val trimmedUrl = normalizedUrl.trimEnd('/')
+            if (trimmedUrl != normalizedUrl) {
+                storyDao.getStoryByUrl(trimmedUrl)?.takeIf { it.id.isNotBlank() }?.let { return it }
+            }
+
+            val rawSlug = extractStoryId(normalizedUrl) ?: return null
+            val matchedSource = sources.firstOrNull { it.matchesUrl(normalizedUrl) }
+
+            if (matchedSource != null) {
+                val canonicalId = "${matchedSource.sourceId}_$rawSlug"
+                storyDao.getStoryById(canonicalId)?.takeIf { it.id.isNotBlank() }?.let { return it }
+
+                // Tương thích ngược với truyện đã lưu từ phiên bản cũ (id = rawSlug không có tiền tố nguồn),
+                // nhưng CHỈ khớp khi cùng sourceId để tránh ghi đè chéo giữa Tàng Thư Viện và SsTruyện.
+                val legacyCached = storyDao.getStoryById(rawSlug)?.takeIf { it.id.isNotBlank() }
+                if (legacyCached != null && legacyCached.sourceId == matchedSource.sourceId) {
+                    return legacyCached
+                }
+                return null
+            }
+
+            // Fallback cho các nguồn cũ đã ngừng cào trực tuyến (truyencom, truyenfull...) chỉ đọc offline
+            return storyDao.getStoryById(rawSlug)?.takeIf { it.id.isNotBlank() }
         }
 
         private fun extractStoryId(url: String): String? =
@@ -451,41 +493,50 @@ class StoryRepository
         private suspend fun mergeAndInsertChapters(
             chapters: List<Chapter>,
             storyId: String,
-        ): List<Chapter> {
-            val existingMap =
-                chapterDao
-                    .getChaptersByStoryOnce(storyId)
-                    .associateBy { it.chapterNumber }
+        ): List<Chapter> =
+            transactionRunner.withWriteTransaction {
+                val existingMap =
+                    chapterDao
+                        .getChaptersByStoryOnce(storyId)
+                        .associateBy { it.chapterNumber }
 
-            // Insert only NEW chapters (IGNORE = skip if already exists)
-            val newChapters = chapters.filter { ch -> existingMap[ch.chapterNumber] == null }
-            if (newChapters.isNotEmpty()) {
-                val entities =
-                    newChapters.map { ch ->
-                        ChapterEntity(
-                            storyId = storyId,
-                            chapterNumber = ch.chapterNumber,
-                            title = ch.title,
-                            url = ch.url,
-                            content = null,
-                            isDownloaded = false,
-                            downloadedTimestamp = null,
-                        )
+                // Insert only NEW chapters (IGNORE = skip if already exists)
+                val newChapters = chapters.filter { ch -> existingMap[ch.chapterNumber] == null }
+                if (newChapters.isNotEmpty()) {
+                    val entities =
+                        newChapters.map { ch ->
+                            ChapterEntity(
+                                storyId = storyId,
+                                chapterNumber = ch.chapterNumber,
+                                title = ch.title,
+                                url = ch.url,
+                                content = null,
+                                isDownloaded = false,
+                                downloadedTimestamp = null,
+                            )
+                        }
+                    chapterDao.insertChaptersIgnore(entities)
+                }
+
+                // Update metadata (title, url) for existing chapters — do not touch content
+                // Bảo toàn title của chương đã tải (isDownloaded == true), chỉ cập nhật url sang domain mới
+                val existingChapters = chapters.filter { ch -> existingMap[ch.chapterNumber] != null }
+                for (ch in existingChapters) {
+                    val existing = existingMap[ch.chapterNumber] ?: continue
+                    val titleToUpdate =
+                        if (existing.isDownloaded && existing.title.isNotBlank()) {
+                            existing.title
+                        } else {
+                            ch.title.ifBlank { existing.title }
+                        }
+                    val urlToUpdate = ch.url.ifBlank { existing.url }
+                    if (titleToUpdate != existing.title || urlToUpdate != existing.url) {
+                        chapterDao.updateChapterMetadata(storyId, ch.chapterNumber, titleToUpdate, urlToUpdate)
                     }
-                chapterDao.insertChaptersIgnore(entities)
-            }
+                }
 
-            // Update metadata (title, url) for existing chapters — NEVER touch content
-            // Bảo toàn title của chương đã tải (isDownloaded == true), chỉ cập nhật url sang domain mới
-            val existingChapters = chapters.filter { ch -> existingMap[ch.chapterNumber] != null }
-            for (ch in existingChapters) {
-                val existing = existingMap[ch.chapterNumber]
-                val titleToUpdate = if (existing?.isDownloaded == true) existing.title else ch.title
-                chapterDao.updateChapterMetadata(storyId, ch.chapterNumber, titleToUpdate, ch.url)
+                chapters.map { if (it.storyId == storyId) it else it.copy(storyId = storyId) }
             }
-
-            return chapters
-        }
 
         /**
          * Progressive loading — Phase 1: Get first page of chapters only.
@@ -501,7 +552,8 @@ class StoryRepository
                 val result = source.getFirstPageChapters(storyUrl)
                 val chapters = mergeAndInsertChapters(result.chapters, storyId)
                 Pair(chapters, result.totalPages)
-            } catch (_: Exception) {
+            } catch (e: Exception) {
+                if (e is CancellationException) throw e
                 val cached = chapterDao.getChaptersByStoryOnce(storyId)
                 if (cached.isNotEmpty()) {
                     Pair(cached.map { it.toDomain() }, 1)
@@ -534,7 +586,8 @@ class StoryRepository
                 val source = sourceFor(storyUrl)
                 val chapters = source.getChapterList(storyUrl)
                 mergeAndInsertChapters(chapters, storyId)
-            } catch (_: Exception) {
+            } catch (e: Exception) {
+                if (e is CancellationException) throw e
                 val cached = chapterDao.getChaptersByStoryOnce(storyId)
                 if (cached.isNotEmpty()) {
                     cached.map { it.toDomain() }
@@ -576,7 +629,13 @@ class StoryRepository
                 val finalContent =
                     if (hasBoilerplateFooter) {
                         val stripped = stripBoilerplateFooter(cached.content)
-                        chapterDao.saveChapterContent(storyId, chapterNumber, stripped)
+                        chapterDao.saveChapterContent(
+                            storyId = storyId,
+                            chapterNumber = chapterNumber,
+                            content = stripped,
+                            title = cached.title,
+                            url = cached.url.ifBlank { chapterUrl },
+                        )
                         stripped
                     } else {
                         cached.content
@@ -584,12 +643,25 @@ class StoryRepository
                 return ChapterContentResult(content = finalContent, title = cached.title)
             }
             // Try fetching from web — route to correct source
+            val cachedChapterUrl = cached?.url?.takeIf { it.isNotBlank() }
+            val effectiveChapterUrl =
+                if (cachedChapterUrl != null && (chapterUrl.isBlank() || !chapterUrl.contains("chuong", ignoreCase = true))) {
+                    cachedChapterUrl
+                } else {
+                    cachedChapterUrl ?: chapterUrl
+                }
             return try {
-                val source = sourceFor(chapterUrl)
-                val result = source.getChapterContentWithTitle(chapterUrl)
+                val source = sourceFor(effectiveChapterUrl)
+                val result = source.getChapterContentWithTitle(effectiveChapterUrl)
 
                 if (cached?.isDownloaded == true && isCorruptedBoilerplate) {
-                    chapterDao.saveChapterContent(storyId, chapterNumber, result.content)
+                    chapterDao.saveChapterContent(
+                        storyId = storyId,
+                        chapterNumber = chapterNumber,
+                        content = result.content,
+                        title = result.title?.takeIf { it.isNotBlank() } ?: cached.title,
+                        url = effectiveChapterUrl,
+                    )
                 }
 
                 // Update chapter title in DB if a real title was extracted
@@ -601,7 +673,7 @@ class StoryRepository
                             storyId = storyId,
                             chapterNumber = chapterNumber,
                             title = result.title,
-                            url = chapterUrl,
+                            url = effectiveChapterUrl,
                         )
                     }
                 }
@@ -653,21 +725,6 @@ class StoryRepository
                 status = status,
             )
 
-        private fun StoryEntity.toDomain() =
-            Story(
-                id = id,
-                slug = slug,
-                title = title,
-                author = author,
-                genres = genres.split(",").filter { it.isNotBlank() },
-                description = description,
-                url = url,
-                totalChapters = totalChapters,
-                coverImageUrl = coverImageUrl,
-                sourceId = sourceId,
-                status = status,
-            )
-
         private fun com.personal.apptruyen.data.local.entity.ChapterEntity.toDomain() =
             Chapter(
                 storyId = storyId,
@@ -693,13 +750,17 @@ class StoryRepository
                                     val fresh = source.getStoryDetail(story.url)
                                     val entity =
                                         fresh.toEntity().copy(
+                                            id = story.id,
+                                            totalChapters = resolveSafeTotalChapters(fresh.totalChapters, story.totalChapters),
+                                            coverImageUrl = resolveSafeCoverUrl(fresh.coverImageUrl, story.coverImageUrl),
                                             isInLibrary = story.isInLibrary,
                                             addedTimestamp = story.addedTimestamp,
                                             storyReplacementsEnabled = story.storyReplacementsEnabled,
                                             storyCustomReplacements = story.storyCustomReplacements,
                                         )
                                     storyDao.insertStory(entity)
-                                } catch (_: Exception) {
+                                } catch (e: Exception) {
+                                    if (e is CancellationException) throw e
                                     // Offline — skip
                                 }
                                 delay(200)
@@ -717,4 +778,62 @@ data class DownloadProgress(
     val total: Int,
     val currentChapterTitle: String = "",
     val errors: Int = 0,
-)
+) {
+    val processed: Int
+        get() = (current + errors).coerceAtMost(total)
+}
+
+internal fun StoryEntity.toDomain(): Story =
+    Story(
+        id = id,
+        slug = slug,
+        title = title,
+        author = author,
+        genres = genres.split(",").filter { it.isNotBlank() },
+        description = description,
+        url = url,
+        totalChapters = totalChapters,
+        coverImageUrl = upgradeToHttps(coverImageUrl),
+        sourceId = sourceId,
+        status = status,
+    )
+
+internal fun upgradeToHttps(url: String): String {
+    val trimmed = url.trim()
+    if (trimmed.startsWith("http://", ignoreCase = true) &&
+        !trimmed.startsWith("http://localhost", ignoreCase = true) &&
+        !trimmed.startsWith("http://127.0.0.1")
+    ) {
+        return "https://" + trimmed.substring(7)
+    }
+    return trimmed
+}
+
+internal fun resolveSafeCoverUrl(
+    freshCoverUrl: String,
+    existingCoverUrl: String?,
+): String {
+    val trimmedFresh = freshCoverUrl.trim()
+    val isFreshValid =
+        trimmedFresh.isNotEmpty() &&
+            !trimmedFresh.startsWith("data:", ignoreCase = true) &&
+            !trimmedFresh.contains("base64", ignoreCase = true)
+    if (isFreshValid) return upgradeToHttps(trimmedFresh)
+
+    val trimmedExisting = existingCoverUrl?.trim().orEmpty()
+    val isExistingValid =
+        trimmedExisting.isNotEmpty() &&
+            !trimmedExisting.startsWith("data:", ignoreCase = true) &&
+            !trimmedExisting.contains("base64", ignoreCase = true)
+    return if (isExistingValid) upgradeToHttps(trimmedExisting) else ""
+}
+
+internal fun resolveSafeTotalChapters(
+    freshTotal: Int,
+    existingTotal: Int,
+): Int =
+    when {
+        freshTotal > 0 -> freshTotal
+        existingTotal > 0 -> existingTotal
+        else -> 0
+    }

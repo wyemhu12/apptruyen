@@ -238,4 +238,63 @@ class TtsPlaybackStateTest {
             assertTrue(sm.onPlayRequested())
             assertEquals(TtsPlaybackStateMachine.State.Playing, sm.state)
         }
+
+    @Test
+    fun `shouldProcessUtteranceDone rejects stale utteranceId or paused state`() =
+        runTest {
+            val sm = TtsPlaybackStateMachine(scope = backgroundScope)
+            assertTrue(sm.onPlayRequested())
+
+            assertTrue(
+                TtsPlaybackStateMachine.shouldProcessUtteranceDone(
+                    utteranceId = "paragraph_3",
+                    currentParagraphIndex = 3,
+                    isPlaying = sm.state == TtsPlaybackStateMachine.State.Playing,
+                ),
+            )
+            assertFalse(
+                TtsPlaybackStateMachine.shouldProcessUtteranceDone(
+                    utteranceId = "paragraph_2",
+                    currentParagraphIndex = 3,
+                    isPlaying = sm.state == TtsPlaybackStateMachine.State.Playing,
+                ),
+            )
+            assertFalse(
+                TtsPlaybackStateMachine.shouldProcessUtteranceDone(
+                    utteranceId = "paragraph_3",
+                    currentParagraphIndex = 3,
+                    isPlaying = false,
+                ),
+            )
+
+            sm.onPauseRequested()
+            assertFalse(
+                TtsPlaybackStateMachine.shouldProcessUtteranceDone(
+                    utteranceId = "paragraph_3",
+                    currentParagraphIndex = 3,
+                    isPlaying = sm.state == TtsPlaybackStateMachine.State.Playing,
+                ),
+            )
+        }
+
+    @Test
+    fun `onStopRequested followed by onPlayRequested clears suppressNextPlay after onAutoAdvanceContentLoaded in PausedDuringAutoAdvance`() =
+        runTest {
+            val sm = TtsPlaybackStateMachine(scope = backgroundScope)
+            sm.onPlayRequested()
+            sm.startAutoAdvanceBuffering()
+            sm.onPauseRequested()
+            assertEquals(TtsPlaybackStateMachine.State.PausedDuringAutoAdvance, sm.state)
+
+            sm.onAutoAdvanceContentLoaded()
+            assertTrue(sm.suppressNextPlay)
+
+            // User stops TTS (e.g. switches chapter manually), then plays new chapter
+            sm.onStopRequested()
+            assertFalse(sm.suppressNextPlay)
+            assertEquals(TtsPlaybackStateMachine.State.Idle, sm.state)
+
+            assertTrue(sm.onPlayRequested())
+            assertEquals(TtsPlaybackStateMachine.State.Playing, sm.state)
+        }
 }

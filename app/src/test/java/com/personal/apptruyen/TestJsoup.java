@@ -1,21 +1,22 @@
+package com.personal.apptruyen;
+
 import org.jsoup.Jsoup;
 import org.jsoup.nodes.Document;
+import org.junit.jupiter.api.Assertions;
+import org.junit.jupiter.api.Test;
 
 public class TestJsoup {
-    public static void main(String[] args) throws Exception {
-        Document doc = Jsoup.connect("https://tangthuvien.org/truyen").get();
+    @Test
+    void parseStaticHtmlExtractsStoryLinks() {
+        String html = "<html><body>"
+                + "<a href=\"/truyen?genre=tien-hiep\">Tiên Hiệp</a>"
+                + "<div class=\"story-cover\"><img src=\"https://tangthuvien.org/cover.jpg\" alt=\"cover\"/></div>"
+                + "</body></html>";
+        Document doc = Jsoup.parse(html, "https://tangthuvien.org");
         var links = doc.select("a[href*=?genre=]");
-        System.out.println("Links found: " + links.size());
-        if (links.size() > 0) {
-            System.out.println("First link: " + links.first().attr("href") + " -> " + links.first().text());
-        }
-        
-        var coverImg = doc.selectFirst(".story-cover img, .book-info-pic img");
-        System.out.println("Cover img selector '.story-cover img, .book-info-pic img': " + (coverImg != null));
-        
-        // Let's get a story page and find its cover image
-        Document storyDoc = Jsoup.connect("https://tangthuvien.org/doc-quyen-dich-toan-chuc-phap-su-he-thong-hop-mu-khong-dung-dan").get();
-        var img = storyDoc.selectFirst("img[alt=cover], .image-cover");
-        System.out.println("Cover img on story page (alt=cover): " + (img != null ? img.attr("src") : "null"));
+        Assertions.assertEquals(1, links.size());
+        Assertions.assertEquals("Tiên Hiệp", links.first().text());
+        var coverImg = doc.selectFirst(".story-cover img");
+        Assertions.assertEquals("https://tangthuvien.org/cover.jpg", coverImg.attr("src"));
     }
 }

@@ -1,6 +1,6 @@
 ---
 trigger: always_on
-description: Giao thức Plan → Review → Revise, Code Freeze Guard, Zero-Self-Execution, Dual-Reviewer (Claude CLI + @reviewer fallback), severity rubric, pre-flight gate.
+description: Giao thức Plan → Review → Revise, Code Freeze Guard, Zero-Self-Execution, Dual-Reviewer (Claude CLI primary + Gemini 4 Argon @reviewer fallback), severity rubric, pre-flight gate.
 ---
 
 # Giao Thức Plan → Review → Revise & Cơ Chế Cưỡng Chế
@@ -39,7 +39,7 @@ description: Giao thức Plan → Review → Revise, Code Freeze Guard, Zero-Sel
      * `1`: Thiếu plan/template, sai định dạng, hoặc plan đã đóng (`Completed`/`Superseded`).
      * `40` (không có CLI), `41` (chưa đăng nhập), `42` (`[CLAUDE_PRO_QUOTA_EXCEEDED]`), `44` (`[REVIEW_INCONCLUSIVE]`), `45` (`[CLAUDE_CLI_ERROR]`): Tự động chuyển sang fallback `@reviewer`.
      * `43` (`[APPROVAL_ATTESTATION_FAILED]` do Claude sửa ngoài phần append), `46` (mất snapshot), `47` (`[STALE_RUN]` / `[STALE_APPROVAL_TAG]` lượt cũ chưa dọn): Dừng chuỗi và báo User. Cách gỡ 47: chạy `node .agents/scripts/review-run.js restore --plan <rel> --run-dir <dir>` với sự xác nhận của User.
-2. **Fallback: subagent `@reviewer`**:
+2. **Fallback: subagent `@reviewer` (`gemini-4-argon` với thinking budget tối đa)**:
    - Dùng khi Primary trả exit 40, 41, 42, 44, 45 hoặc lỗi kết nối. Dispatch bằng `invoke_subagent` với prompt "Đọc và tuân thủ tuyệt đối `.agents/agents/reviewer/agent.md`. Review plan: docs/plans/<plan>.md".
    - `@reviewer` CHỈ append Audit Run vào cuối file plan bằng 1 chunk (bắt đầu bằng `[REVIEWER_MODEL: <model>]`, kết thúc bằng dòng kết luận chuẩn). `@reviewer` TUYỆT ĐỐI KHÔNG ghi dòng thẻ hay đổi header.
    - Nếu kết luận là APPROVED: Orchestrator dùng `multi_replace_file_content` ghi header `Approved` và append dòng thẻ. Hook sẽ hỏi User xác nhận kèm tóm tắt `summarizeFallback` (User xác nhận 1 lần).

@@ -41,7 +41,7 @@ Sau khi sửa: cập nhật `docs/scraping.md` (URL Patterns, CSS Selectors, edg
 ## Làm Sạch Nội Dung
 
 - Loại quảng cáo, script, watermark, link rác bằng `adsSelectors` và quy tắc riêng của nguồn. Giữ ngắt đoạn để Reader và TTS đọc đúng.
-- Nội dung mã hóa (LacaTruyen) làm theo `docs/scraping_lacatruyen_decryption.md` và dùng `CryptoJS.kt`. Lỗi giải mã không được làm crash app.
+- Nguồn LacaTruyen và class `CryptoJS.kt` đã được gỡ bỏ khỏi codebase (tài liệu `docs/scraping_lacatruyen_decryption.md` chỉ giữ làm tư liệu kỹ thuật lịch sử). Nếu tích hợp nguồn có nội dung mã hóa trong tương lai, lỗi giải mã phải ném `ScraperException.ParseException` và không được làm crash app.
 
 ## Test
 

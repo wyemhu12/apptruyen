@@ -40,9 +40,9 @@
 **S5: Security & Privacy Boundary**
 
 - KIỂM TRA cookie/phiên đăng nhập nguồn truyện (`<pkg>/data/remote/cookie/`, `auth/`): không log cookie/token qua Timber, không đưa vào crash log (`<pkg>/util/CrashHandler.kt`), không đưa vào file backup JSON (`BackupData`).
-- KIỂM TRA `AndroidManifest.xml`: component mới có `exported` đúng mức tối thiểu; intent nhận từ ngoài phải được validate (xem skill `android-intent-security`). Lưu ý hiện trạng `allowBackup="true"` và `usesCleartextTraffic="true"`: plan thêm dữ liệu nhạy cảm thì phải đánh giá lại.
+- KIỂM TRA `AndroidManifest.xml`: component mới có `exported` đúng mức tối thiểu; intent nhận từ ngoài phải được validate (xem skill `android-intent-security`). Đảm bảo giữ nguyên `usesCleartextTraffic="false"`; nếu plan thêm dữ liệu nhạy cảm thì phải đánh giá lại `allowBackup="true"` và `backup_rules.xml`.
 - KIỂM TRA WebView: bật JavaScript thì có `addJavascriptInterface` không; có tải URL ngoài domain nguồn không.
-- KIỂM TRA giải mã nội dung (`<pkg>/data/remote/CryptoJS.kt`): key/IV không hardcode lan man, lỗi giải mã không làm crash app.
+- KIỂM TRA giải mã nội dung (nếu có; lưu ý `CryptoJS.kt` của nguồn cũ LacaTruyen đã được gỡ bỏ khỏi codebase): key/IV không hardcode lan man, lỗi giải mã không làm crash app.
 - BẮT BUỘC Adversarial Timeline cho TOCTOU: cookie hết hạn giữa chừng, redirect sang trang đăng nhập/Cloudflare bị parse nhầm thành nội dung chương.
 
 **S6: External Resilience (Nguồn Truyện, Mạng, TTS Engine)**

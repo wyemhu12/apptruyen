@@ -76,7 +76,7 @@ class SearchViewModelTest {
         }
 
     @Test
-    fun `search with no results shows error message`() =
+    fun `search with no results sets error to null and hasSearched to true while network exception sets Vietnamese error`() =
         runTest {
             coEvery { repository.searchStories("xyz", any()) } returns emptyList()
 
@@ -89,7 +89,16 @@ class SearchViewModelTest {
 
             val state = viewModel.state.value
             assertTrue(state.results.isEmpty())
-            assertTrue(state.error?.contains("xyz") == true)
+            assertTrue(state.hasSearched)
+            assertNull(state.error)
+
+            coEvery { repository.searchStories("xyz", any()) } throws RuntimeException("Read timed out")
+            viewModel.search()
+            advanceUntilIdle()
+
+            val errState = viewModel.state.value
+            assertNotNull(errState.error)
+            assertFalse(errState.error?.contains("Read timed out") == true)
         }
 
     @Test
@@ -164,5 +173,55 @@ class SearchViewModelTest {
             viewModel = SearchViewModel(repository, searchHistoryRepository, authRepository)
             viewModel.dismissLoginPrompt("wikidich")
             verify { authRepository.clearLoginRequired("wikidich") }
+        }
+
+    @Test
+    fun `applyFilter and applyAllFilters with ChapterCountFilter only trigger browseByFilterOnly and clearAllFilters resets state`() =
+        runTest {
+            val shortStory = sampleStory.copy(id = "short.1", title = "Truyện Ngắn", totalChapters = 50)
+            val longStory = sampleStory.copy(id = "long.1", title = "Truyện Dài", totalChapters = 350)
+            coEvery { repository.getCompletedStories(1) } returns listOf(shortStory, longStory)
+
+            viewModel = SearchViewModel(repository, searchHistoryRepository, authRepository)
+            advanceUntilIdle()
+
+            viewModel.applyFilter(null, ChapterCountFilter.OVER_200)
+            advanceUntilIdle()
+
+            val stateAfterFilter = viewModel.state.value
+            assertTrue(stateAfterFilter.hasSearched)
+            assertTrue(stateAfterFilter.isFilterActive)
+            assertEquals(1, stateAfterFilter.results.size)
+            assertEquals("Truyện Dài", stateAfterFilter.results[0].title)
+            coVerify { repository.getCompletedStories(1) }
+
+            viewModel.clearAllFilters()
+            advanceUntilIdle()
+
+            val stateAfterClear = viewModel.state.value
+            assertFalse(stateAfterClear.hasSearched)
+            assertFalse(stateAfterClear.isFilterActive)
+            assertTrue(stateAfterClear.results.isEmpty())
+        }
+
+    @Test
+    fun `loadMoreFilterResults stops canLoadMore when duplicate results returned or exception thrown`() =
+        runTest {
+            val genre = Genre(name = "Tiên Hiệp", slug = "tien-hiep", categoryId = 1)
+            coEvery { repository.getStoriesByGenre(genre.slug, 1, 0, true) } returns listOf(sampleStory)
+            coEvery { repository.getStoriesByGenre(genre.slug, 2, 0, true) } returns listOf(sampleStory)
+
+            viewModel = SearchViewModel(repository, searchHistoryRepository, authRepository)
+            advanceUntilIdle()
+
+            viewModel.applyFilter(genre, ChapterCountFilter.NONE)
+            advanceUntilIdle()
+            assertTrue(viewModel.state.value.canLoadMore)
+
+            viewModel.loadMoreFilterResults()
+            advanceUntilIdle()
+
+            assertEquals(1, viewModel.state.value.results.size)
+            assertFalse(viewModel.state.value.canLoadMore)
         }
 }

@@ -9,6 +9,8 @@ import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
@@ -53,7 +55,7 @@ sealed class Screen(
     data object Explore : Screen("explore")
 
     data object Search : Screen("search?query={query}") {
-        fun createRoute(query: String = "") = "search?query=$query"
+        fun createRoute(query: String = "") = if (query.isBlank()) "search?query=" else "search?query=${NavigationUtils.encodeRouteParam(query)}"
     }
 
     data object StoryDetail : Screen("story/{storyId}/{storyUrl}") {
@@ -61,9 +63,12 @@ sealed class Screen(
             storyId: String,
             storyUrl: String,
         ): String {
-            val encoded = NavigationUtils.encodeUrl(storyUrl)
-            return "story/$storyId/$encoded"
+            val encodedId = NavigationUtils.encodeRouteParam(storyId)
+            val encodedUrl = NavigationUtils.encodeUrl(storyUrl)
+            return "story/$encodedId/$encodedUrl"
         }
+
+        fun decodeId(encoded: String): String = NavigationUtils.decodeRouteParam(encoded)
 
         fun decodeUrl(encoded: String): String = NavigationUtils.decodeUrl(encoded)
     }
@@ -74,9 +79,12 @@ sealed class Screen(
             chapterNumber: Int,
             chapterUrl: String,
         ): String {
-            val encoded = NavigationUtils.encodeUrl(chapterUrl)
-            return "reader/$storyId/$chapterNumber/$encoded"
+            val encodedId = NavigationUtils.encodeRouteParam(storyId)
+            val encodedUrl = NavigationUtils.encodeUrl(chapterUrl)
+            return "reader/$encodedId/$chapterNumber/$encodedUrl"
         }
+
+        fun decodeId(encoded: String): String = NavigationUtils.decodeRouteParam(encoded)
 
         fun decodeUrl(encoded: String): String = NavigationUtils.decodeUrl(encoded)
     }
@@ -156,6 +164,7 @@ fun AppNavigation(windowSizeClass: WindowSizeClass? = null) {
         }
     } else {
         Scaffold(
+            contentWindowInsets = WindowInsets(0, 0, 0, 0),
             bottomBar = {
                 AnimatedVisibility(
                     visible = showBottomBar,
@@ -208,7 +217,12 @@ private fun AppNavContent(
     NavHost(
         navController = navController,
         startDestination = Screen.Splash.route,
-        modifier = if (padding != null) Modifier.padding(padding) else Modifier,
+        modifier =
+            if (padding != null) {
+                Modifier.padding(padding).consumeWindowInsets(padding)
+            } else {
+                Modifier
+            },
         // Default transitions for tab screens: fade crossfade
         enterTransition = { fadeIn(tween(250)) },
         exitTransition = { fadeOut(tween(200)) },
@@ -268,7 +282,7 @@ private fun AppNavContent(
                 slideOutHorizontally(tween(300)) { it / 3 } + fadeOut(tween(250))
             },
         ) { backStackEntry ->
-            val query = backStackEntry.arguments?.getString("query") ?: ""
+            val query = NavigationUtils.decodeRouteParam(backStackEntry.arguments?.getString("query") ?: "")
             SearchScreen(
                 onBack = { navController.popBackStack() },
                 onStoryClick = { id, url ->

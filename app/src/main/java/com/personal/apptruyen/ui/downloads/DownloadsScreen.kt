@@ -24,6 +24,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil3.compose.AsyncImage
 import com.personal.apptruyen.ui.components.AnimatedEmptyState
 import com.personal.apptruyen.ui.theme.*
@@ -34,9 +35,11 @@ fun DownloadsScreen(
     onStoryClick: (String, String) -> Unit,
     viewModel: DownloadsViewModel = hiltViewModel(),
 ) {
-    val allDownloads by viewModel.stories.collectAsState()
-    val filteredDownloads by viewModel.filteredStories.collectAsState()
-    val searchQuery by viewModel.searchQuery.collectAsState()
+    val allDownloads by viewModel.stories.collectAsStateWithLifecycle()
+    val filteredDownloads by viewModel.filteredStories.collectAsStateWithLifecycle()
+    val searchQuery by viewModel.searchQuery.collectAsStateWithLifecycle()
+    val errorMessage by viewModel.errorMessage.collectAsStateWithLifecycle()
+    val snackbarHostState = remember { SnackbarHostState() }
     var storyToDelete by remember { mutableStateOf<String?>(null) }
     var isSearchVisible by remember { mutableStateOf(false) }
     val focusRequester = remember { FocusRequester() }
@@ -48,7 +51,14 @@ fun DownloadsScreen(
         if (isSearchVisible) focusRequester.requestFocus()
     }
 
+    LaunchedEffect(errorMessage) {
+        val message = errorMessage ?: return@LaunchedEffect
+        snackbarHostState.showSnackbar(message)
+        viewModel.clearError()
+    }
+
     Scaffold(
+        snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
             Column {
                 TopAppBar(
