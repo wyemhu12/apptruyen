@@ -1,5 +1,6 @@
 ---
-trigger: always_on
+trigger: glob
+globs: "*.kt, *.kts, **/*.kt, **/*.kts"
 description: Chuẩn Kotlin/Compose, xử lý lỗi, yêu cầu test, cấu trúc file, đặt tên, kích thước file và trạng thái cưỡng chế.
 ---
 
@@ -92,14 +93,14 @@ Tạo mới hoặc sửa logic trong `data/repository/`, `data/remote/` (scraper
 | Entity       | `{Name}Entity.kt`       | `StoryEntity.kt`         |
 | DAO          | `{Name}Dao.kt`          | `StoryDao.kt`            |
 | Domain Model | `{Name}.kt`             | `Story.kt`               |
-| Scraper      | `{Source}Scraper.kt`    | `TruyenFullScraper.kt`   |
+| Scraper      | `{Source}Scraper.kt`    | `SsTruyenScraper.kt`     |
 | Test         | `{Class}Test.kt`        | `StoryRepositoryTest.kt` |
 
 Hàm/biến `camelCase`, hằng số `UPPER_SNAKE_CASE`, Composable `PascalCase`.
 
 ## Kích Thước File & Tính Mô-đun
 
-> Tối ưu cho khả năng đọc hiểu của AI agent (Claude Opus 4.6 / 5.5, Gemini 4 Argon, Gemini 3.1 Pro). Thước đo chính là **Single Responsibility**; số dòng chỉ là heuristic.
+> Tối ưu cho khả năng đọc hiểu của AI agent (Gemini 4 Argon, Claude Opus 5.5, Claude Sonnet 5.5, Gemini 3.8 Flash). Thước đo chính là **Single Responsibility**; số dòng chỉ là heuristic.
 
 | Loại file                    | Mục tiêu | Tối đa | Khi nào tách                                         |
 | ---------------------------- | -------- | ------ | ---------------------------------------------------- |

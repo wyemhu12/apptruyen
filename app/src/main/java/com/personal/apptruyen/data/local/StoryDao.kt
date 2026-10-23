@@ -27,6 +27,12 @@ interface StoryDao {
     @Update
     suspend fun updateStory(story: StoryEntity)
 
+    @Query("UPDATE stories SET totalChapters = :totalChapters WHERE id = :storyId AND totalChapters < :totalChapters")
+    suspend fun updateTotalChaptersIfGreater(
+        storyId: String,
+        totalChapters: Int,
+    )
+
     @Query("DELETE FROM stories WHERE id = :storyId")
     suspend fun deleteStory(storyId: String)
 

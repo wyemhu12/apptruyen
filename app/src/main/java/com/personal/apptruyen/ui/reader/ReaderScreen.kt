@@ -118,6 +118,7 @@ fun ReaderScreen(
     // [CRIT-09] Khôi phục vị trí cuộn sau khi chương tải xong, sau đó mới lắng nghe snapshotFlow để lưu debounce
     LaunchedEffect(state.currentChapterNumber, state.isLoading) {
         if (state.isLoading || state.error != null || paragraphs.isEmpty()) return@LaunchedEffect
+        val effectChapterNumber = state.currentChapterNumber
         if (state.scrollToEnd) {
             snapshotFlow { listState.layoutInfo.totalItemsCount }
                 .first { it > 2 }
@@ -125,13 +126,15 @@ fun ReaderScreen(
         } else if (state.initialScrollIndex > 0) {
             val maxItemIndex = (paragraphs.size + 1).coerceAtLeast(0)
             listState.scrollToItem(state.initialScrollIndex.coerceIn(0, maxItemIndex))
+        } else if (listState.firstVisibleItemIndex != 0 || listState.firstVisibleItemScrollOffset != 0) {
+            listState.scrollToItem(0)
         }
         snapshotFlow { listState.firstVisibleItemIndex }
             .distinctUntilChanged()
             .drop(1)
             .collectLatest { index ->
                 delay(1000L)
-                viewModel.onIntent(ReaderIntent.SaveScrollPosition(index))
+                viewModel.onIntent(ReaderIntent.SaveScrollPosition(index, effectChapterNumber))
             }
     }
 
@@ -139,7 +142,8 @@ fun ReaderScreen(
     val lifecycleOwner = LocalLifecycleOwner.current
     val currentState by rememberUpdatedState(state)
     val currentParagraphs by rememberUpdatedState(paragraphs)
-    DisposableEffect(lifecycleOwner, listState) {
+    val currentListState by rememberUpdatedState(listState)
+    DisposableEffect(lifecycleOwner) {
         val observer =
             LifecycleEventObserver { _, event ->
                 when (event) {
@@ -148,7 +152,12 @@ fun ReaderScreen(
                     }
                     Lifecycle.Event.ON_PAUSE -> {
                         if (!currentState.isLoading && currentState.error == null && currentParagraphs.isNotEmpty()) {
-                            viewModel.onIntent(ReaderIntent.SaveScrollPosition(listState.firstVisibleItemIndex))
+                            viewModel.onIntent(
+                                ReaderIntent.SaveScrollPosition(
+                                    currentListState.firstVisibleItemIndex,
+                                    currentState.currentChapterNumber,
+                                ),
+                            )
                         }
                         viewModel.onIntent(ReaderIntent.OnReaderPaused)
                     }
@@ -159,7 +168,12 @@ fun ReaderScreen(
         onDispose {
             lifecycleOwner.lifecycle.removeObserver(observer)
             if (!currentState.isLoading && currentState.error == null && currentParagraphs.isNotEmpty()) {
-                viewModel.onIntent(ReaderIntent.SaveScrollPosition(listState.firstVisibleItemIndex))
+                viewModel.onIntent(
+                    ReaderIntent.SaveScrollPosition(
+                        currentListState.firstVisibleItemIndex,
+                        currentState.currentChapterNumber,
+                    ),
+                )
             }
             viewModel.onIntent(ReaderIntent.OnReaderPaused)
         }

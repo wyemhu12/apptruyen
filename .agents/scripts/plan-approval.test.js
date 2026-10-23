@@ -273,3 +273,73 @@ test('A29: Khóa ghi đang treo (Pending writes lock)', () => {
         fs.rmSync(tmpDir, { recursive: true, force: true });
     }
 });
+
+test('A30: Hỗ trợ bí danh công cụ write_file, Write, edit_file, Edit, MultiEdit và chặn Append', () => {
+    const approvedPlan = [
+        '# Kế hoạch triển khai: Test',
+        '',
+        '> **Trạng thái**: Approved',
+        '> **Revision**: 1',
+        '',
+        '## Technical Plan',
+        'Nội dung kỹ thuật.',
+        '',
+        '## Audit History',
+        '### Audit Run 1',
+        '**Kết luận**: APPROVED · BLOCKER 0 · MAJOR 0',
+        '',
+        '[PLAN_APPROVED]'
+    ].join('\n');
+
+    // 1. write_file với Append: true bị từ chối fail-closed
+    const appendNorm = normalizeToolArgs('write_file', {
+        Path: 'docs/plans/test.md',
+        Content: 'extra',
+        Append: true
+    });
+    assert.equal(appendNorm.error, '[APPEND_NOT_SUPPORTED]');
+
+    // 2. write_file / Write trên plan đã duyệt bị chặn bởi APPROVED_PLAN_LOCKED
+    const writeFileNorm = normalizeToolArgs('write_file', {
+        Path: 'docs/plans/test.md',
+        Content: approvedPlan
+    });
+    assert.equal(detectApprovalTransition(writeFileNorm, approvedPlan)?.code, 'APPROVED_PLAN_LOCKED');
+
+    // 3. edit_file / Edit sửa thân plan đã duyệt bị chặn bởi APPROVED_PLAN_LOCKED
+    const editFileNorm = normalizeToolArgs('edit_file', {
+        Path: 'docs/plans/test.md',
+        Target: 'Nội dung kỹ thuật.',
+        Replacement: 'Sửa trộm.'
+    });
+    assert.equal(detectApprovalTransition(editFileNorm, approvedPlan)?.code, 'APPROVED_PLAN_LOCKED');
+
+    const claudeEditNorm = normalizeToolArgs('Edit', {
+        file_path: 'docs/plans/test.md',
+        old_string: 'Nội dung kỹ thuật.',
+        new_string: 'Sửa trộm.',
+        replace_all: false
+    });
+    assert.equal(detectApprovalTransition(claudeEditNorm, approvedPlan)?.code, 'APPROVED_PLAN_LOCKED');
+
+    // 4. edit_file 1 chunk đổi dòng trạng thái Approved -> In Progress được cho phép (null)
+    const headerTransition = normalizeToolArgs('edit_file', {
+        Path: 'docs/plans/test.md',
+        Target: '> **Trạng thái**: Approved',
+        Replacement: '> **Trạng thái**: In Progress'
+    });
+    assert.equal(detectApprovalTransition(headerTransition, approvedPlan), null);
+
+    // 5. MultiEdit chạm vùng nhạy cảm trên plan Ready for Review bị chặn bởi MULTI_CHUNK_SENSITIVE
+    const openPlan = approvedPlan
+        .replace('> **Trạng thái**: Approved', '> **Trạng thái**: Ready for Review')
+        .replace('\n\n[PLAN_APPROVED]', '');
+    const multiEditNorm = normalizeToolArgs('MultiEdit', {
+        file_path: 'docs/plans/test.md',
+        edits: [
+            { old_string: '> **Trạng thái**: Ready for Review', new_string: '> **Trạng thái**: Approved' },
+            { old_string: 'Nội dung kỹ thuật.', new_string: 'Nội dung khác.' }
+        ]
+    });
+    assert.equal(detectApprovalTransition(multiEditNorm, openPlan)?.code, 'MULTI_CHUNK_SENSITIVE');
+});

@@ -559,4 +559,198 @@ class ReaderViewModelTest {
             viewModel.onIntent(ReaderIntent.ClearSnackbar)
             assertNull(viewModel.state.value.snackbarMessage)
         }
+
+    @Test
+    fun `loadNextChapterOnScroll resets initialScrollIndex to zero lowers isLoadingNextChapter and allows consecutive swipe`() =
+        runTest {
+            val ch1 = Chapter(storyId = "test-story", chapterNumber = 1, title = "Chương 1", url = "https://example.com/chuong-1")
+            val ch2 = Chapter(storyId = "test-story", chapterNumber = 2, title = "Chương 2", url = "https://example.com/chuong-2")
+            val ch3 = Chapter(storyId = "test-story", chapterNumber = 3, title = "Chương 3", url = "https://example.com/chuong-3")
+            every { repository.observeChapters("test-story") } returns flowOf(listOf(ch1, ch2, ch3))
+            coEvery {
+                repository.getChapterContent("test-story", 1, any())
+            } returns ChapterContentResult(content = "Đoạn 1\n\nĐoạn 2", title = "Chương 1")
+            coEvery {
+                repository.getChapterContent("test-story", 2, any())
+            } returns ChapterContentResult(content = "Chương 2 đoạn 1\n\nChương 2 đoạn 2", title = "Chương 2")
+            coEvery {
+                repository.getChapterContent("test-story", 3, any())
+            } returns ChapterContentResult(content = "Chương 3 đoạn 1\n\nChương 3 đoạn 2", title = "Chương 3")
+
+            val viewModel = createViewModel()
+            advanceUntilIdle()
+
+            viewModel.onIntent(ReaderIntent.SaveScrollPosition(45, 1))
+            assertEquals(45, viewModel.state.value.initialScrollIndex)
+
+            // Giả lập DB có sẵn tiến độ cũ của chương 2 ở cuối chương (88)
+            coEvery {
+                readingProgressRepository.getReadingProgress("test-story")
+            } returns ReadingProgress(storyId = "test-story", lastChapterNumber = 2, scrollPosition = 88)
+
+            // Vuốt lần 1: Chương 1 -> Chương 2
+            viewModel.onIntent(ReaderIntent.LoadNextOnScroll)
+            advanceUntilIdle()
+
+            assertEquals(2, viewModel.state.value.currentChapterNumber)
+            assertEquals(0, viewModel.state.value.initialScrollIndex)
+            assertFalse(viewModel.state.value.isLoadingNextChapter)
+            assertFalse(viewModel.state.value.scrollToEnd)
+            coVerify {
+                readingProgressRepository.saveReadingProgress(
+                    match { it.storyId == "test-story" && it.lastChapterNumber == 2 && it.scrollPosition == 0 },
+                )
+            }
+
+            // Vuốt lần 2 liên tiếp: Chương 2 -> Chương 3
+            viewModel.onIntent(ReaderIntent.LoadNextOnScroll)
+            advanceUntilIdle()
+
+            assertEquals(3, viewModel.state.value.currentChapterNumber)
+            assertEquals(0, viewModel.state.value.initialScrollIndex)
+            assertFalse(viewModel.state.value.isLoadingNextChapter)
+        }
+
+    @Test
+    fun `nextChapter resets initialScrollIndex to zero and does not restore old scroll position`() =
+        runTest {
+            val ch1 = Chapter(storyId = "test-story", chapterNumber = 1, title = "Chương 1", url = "https://example.com/chuong-1")
+            val ch2 = Chapter(storyId = "test-story", chapterNumber = 2, title = "Chương 2", url = "https://example.com/chuong-2")
+            every { repository.observeChapters("test-story") } returns flowOf(listOf(ch1, ch2))
+            coEvery {
+                repository.getChapterContent("test-story", 1, any())
+            } returns ChapterContentResult(content = "Đoạn 1\n\nĐoạn 2", title = "Chương 1")
+            coEvery {
+                repository.getChapterContent("test-story", 2, any())
+            } returns ChapterContentResult(content = "Chương 2 đoạn 1\n\nChương 2 đoạn 2", title = "Chương 2")
+
+            val viewModel = createViewModel()
+            advanceUntilIdle()
+
+            viewModel.onIntent(ReaderIntent.SaveScrollPosition(30, 1))
+            coEvery {
+                readingProgressRepository.getReadingProgress("test-story")
+            } returns ReadingProgress(storyId = "test-story", lastChapterNumber = 2, scrollPosition = 60)
+
+            viewModel.onIntent(ReaderIntent.NextChapter)
+            advanceUntilIdle()
+
+            assertEquals(2, viewModel.state.value.currentChapterNumber)
+            assertEquals(0, viewModel.state.value.initialScrollIndex)
+        }
+
+    @Test
+    fun `saveScrollPosition ignores stale event from previous chapterNumber or while loading or on error state`() =
+        runTest {
+            val ch1 = Chapter(storyId = "test-story", chapterNumber = 1, title = "Chương 1", url = "https://example.com/chuong-1")
+            val ch2 = Chapter(storyId = "test-story", chapterNumber = 2, title = "Chương 2", url = "https://example.com/chuong-2")
+            val ch3 = Chapter(storyId = "test-story", chapterNumber = 3, title = "Chương 3", url = "https://example.com/chuong-3")
+            every { repository.observeChapters("test-story") } returns flowOf(listOf(ch1, ch2, ch3))
+            coEvery {
+                repository.getChapterContent("test-story", 1, any())
+            } returns ChapterContentResult(content = "Đoạn 1\n\nĐoạn 2", title = "Chương 1")
+            coEvery {
+                repository.getChapterContent("test-story", 2, any())
+            } returns ChapterContentResult(content = "Chương 2 đoạn 1\n\nChương 2 đoạn 2", title = "Chương 2")
+            coEvery {
+                repository.getChapterContent("test-story", 3, any())
+            } throws RuntimeException("Network error on chapter 3")
+
+            val viewModel = createViewModel()
+            advanceUntilIdle()
+
+            // Chuyển sang chương 2
+            viewModel.onIntent(ReaderIntent.LoadNextOnScroll)
+            advanceUntilIdle()
+            assertEquals(2, viewModel.state.value.currentChapterNumber)
+            assertEquals(0, viewModel.state.value.initialScrollIndex)
+
+            clearMocks(readingProgressRepository, answers = false)
+
+            // Sự kiện trễ từ chương 1 gửi tới khi đang ở chương 2 -> phải bị bỏ qua
+            viewModel.onIntent(ReaderIntent.SaveScrollPosition(position = 55, chapterNumber = 1))
+            assertEquals(0, viewModel.state.value.initialScrollIndex)
+            coVerify(exactly = 0) { readingProgressRepository.saveReadingProgress(any()) }
+
+            // Chuyển sang chương 3 bị lỗi mạng (error != null) -> SaveScrollPosition phải bị bỏ qua
+            viewModel.onIntent(ReaderIntent.NextChapter)
+            advanceUntilIdle()
+            assertNotNull(viewModel.state.value.error)
+
+            viewModel.onIntent(ReaderIntent.SaveScrollPosition(position = 0, chapterNumber = 3))
+            coVerify(exactly = 0) { readingProgressRepository.saveReadingProgress(any()) }
+        }
+
+    @Test
+    fun `reprocessCurrentChapter on cache miss and retryLoadChapter preserve in-memory scrollPosition of same chapter`() =
+        runTest {
+            coEvery {
+                repository.getChapterContent("test-story", 1, any())
+            } returns ChapterContentResult(content = "Đoạn 1\n\nĐoạn 2\n\nĐoạn 3", title = "Chương 1")
+
+            val viewModel = createViewModel()
+            advanceUntilIdle()
+
+            viewModel.onIntent(ReaderIntent.SaveScrollPosition(28, 1))
+            assertEquals(28, viewModel.state.value.initialScrollIndex)
+
+            // Gọi RetryLoad trên cùng chương 1 khi đã cuộn tới đoạn 28 -> giữ nguyên vị trí 28
+            viewModel.onIntent(ReaderIntent.RetryLoad)
+            advanceUntilIdle()
+            assertEquals(28, viewModel.state.value.initialScrollIndex)
+
+            // Xóa contentCache qua reflection để mô phỏng cache miss khi reprocessCurrentChapter chạy
+            val cacheField = ReaderViewModel::class.java.getDeclaredField("contentCache")
+            cacheField.isAccessible = true
+            val cacheMap = cacheField.get(viewModel) as MutableMap<*, *>
+            cacheMap.clear()
+
+            viewModel.onIntent(ReaderIntent.ToggleAutoFormat)
+            advanceUntilIdle()
+
+            assertEquals(1, viewModel.state.value.currentChapterNumber)
+            assertEquals(28, viewModel.state.value.initialScrollIndex)
+        }
+
+    @Test
+    fun `initial load on screen open still restores saved scrollPosition from DB`() =
+        runTest {
+            coEvery {
+                readingProgressRepository.getReadingProgress("test-story")
+            } returns ReadingProgress(storyId = "test-story", lastChapterNumber = 1, scrollPosition = 25)
+            coEvery {
+                repository.getChapterContent("test-story", 1, any())
+            } returns ChapterContentResult(content = "Đoạn 1\n\nĐoạn 2", title = "Chương 1")
+
+            val viewModel = createViewModel()
+            advanceUntilIdle()
+
+            assertEquals(25, viewModel.state.value.initialScrollIndex)
+        }
+
+    @Test
+    fun `saveScrollPosition persists via appScope even when viewModelScope is cancelled on back press`() =
+        runTest {
+            coEvery {
+                repository.getChapterContent("test-story", 1, any())
+            } returns ChapterContentResult(content = "Đoạn 1\n\nĐoạn 2", title = "Chương 1")
+
+            val viewModel = createViewModel()
+            advanceUntilIdle()
+
+            clearMocks(readingProgressRepository, answers = false)
+
+            // Mô phỏng onDispose gọi SaveScrollPosition(42, 1) khi rời màn hình
+            viewModel.onIntent(ReaderIntent.SaveScrollPosition(position = 42, chapterNumber = 1))
+            val onClearedMethod = ReaderViewModel::class.java.getDeclaredMethod("onCleared")
+            onClearedMethod.isAccessible = true
+            onClearedMethod.invoke(viewModel)
+            advanceUntilIdle()
+
+            coVerify(atLeast = 1) {
+                readingProgressRepository.saveReadingProgress(
+                    match { it.storyId == "test-story" && it.lastChapterNumber == 1 && it.scrollPosition == 42 },
+                )
+            }
+        }
 }

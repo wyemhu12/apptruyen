@@ -229,6 +229,10 @@ export function setHeaderStatus(rawContent, newStatus) {
     return `# Kế hoạch triển khai\n\n> **Trạng thái**: ${newStatus}\n\n${content}`;
 }
 
+export const FULL_WRITE_TOOLS = new Set(['write_to_file', 'write_file', 'Write']);
+export const SINGLE_EDIT_TOOLS = new Set(['replace_file_content', 'edit_file', 'Edit']);
+export const MULTI_EDIT_TOOLS = new Set(['multi_replace_file_content', 'MultiEdit']);
+
 export function normalizeToolArgs(toolName, rawArgs) {
     if (!rawArgs || typeof rawArgs !== 'object') {
         return { toolName, error: '[INVALID_ARGS_PAYLOAD]' };
@@ -239,26 +243,30 @@ export function normalizeToolArgs(toolName, rawArgs) {
         args[k.toLowerCase()] = v;
     }
 
-    const targetFile = args.targetfile;
+    const targetFile = args.targetfile ?? args.path ?? args.file_path ?? args.absolutepath;
     const stepIdx = rawArgs.stepIdx ?? rawArgs.step_idx ?? rawArgs.toolCall?.stepIdx;
 
-    if (toolName === 'write_to_file') {
-        const codeContent = args.codecontent;
+    if (FULL_WRITE_TOOLS.has(toolName)) {
+        if (args.append === true || args.append === 'true') {
+            return { toolName, targetFile, stepIdx, error: '[APPEND_NOT_SUPPORTED]' };
+        }
+        const codeContent = args.codecontent ?? args.content;
         if (typeof codeContent !== 'string') {
             return { toolName, targetFile, stepIdx, error: '[CODE_CONTENT_NOT_STRING]' };
         }
         return { toolName, targetFile, stepIdx, codeContent };
     }
 
-    if (toolName === 'replace_file_content') {
-        const targetContent = args.targetcontent;
-        const replacementContent = args.replacementcontent ?? '';
-        let allowMultiple = false;
+    if (SINGLE_EDIT_TOOLS.has(toolName)) {
+        const targetContent = args.targetcontent ?? args.target ?? args.old_string;
+        const replacementContent = args.replacementcontent ?? args.replacement ?? args.new_string ?? '';
+        let allowMultiple = toolName === 'edit_file';
 
-        if (args.allowmultiple !== undefined) {
-            if (args.allowmultiple === true || args.allowmultiple === 'true') {
+        const rawAllowMultiple = args.allowmultiple ?? args.replace_all;
+        if (rawAllowMultiple !== undefined) {
+            if (rawAllowMultiple === true || rawAllowMultiple === 'true') {
                 allowMultiple = true;
-            } else if (args.allowmultiple === false || args.allowmultiple === 'false') {
+            } else if (rawAllowMultiple === false || rawAllowMultiple === 'false') {
                 allowMultiple = false;
             } else {
                 return { toolName, targetFile, stepIdx, error: '[INVALID_ALLOW_MULTIPLE]' };
@@ -296,8 +304,8 @@ export function normalizeToolArgs(toolName, rawArgs) {
         };
     }
 
-    if (toolName === 'multi_replace_file_content') {
-        let chunksRaw = args.replacementchunks;
+    if (MULTI_EDIT_TOOLS.has(toolName)) {
+        let chunksRaw = args.replacementchunks ?? args.edits;
         if (typeof chunksRaw === 'string') {
             try {
                 chunksRaw = JSON.parse(chunksRaw);
@@ -321,14 +329,15 @@ export function normalizeToolArgs(toolName, rawArgs) {
                 c[k.toLowerCase()] = v;
             }
 
-            const targetContent = c.targetcontent;
-            const replacementContent = c.replacementcontent ?? '';
+            const targetContent = c.targetcontent ?? c.target ?? c.old_string;
+            const replacementContent = c.replacementcontent ?? c.replacement ?? c.new_string ?? '';
             let allowMultiple = false;
 
-            if (c.allowmultiple !== undefined) {
-                if (c.allowmultiple === true || c.allowmultiple === 'true') {
+            const rawAllowMultiple = c.allowmultiple ?? c.replace_all;
+            if (rawAllowMultiple !== undefined) {
+                if (rawAllowMultiple === true || rawAllowMultiple === 'true') {
                     allowMultiple = true;
-                } else if (c.allowmultiple === false || c.allowmultiple === 'false') {
+                } else if (rawAllowMultiple === false || rawAllowMultiple === 'false') {
                     allowMultiple = false;
                 } else {
                     return { toolName, targetFile, stepIdx, error: '[INVALID_ALLOW_MULTIPLE]' };
@@ -458,7 +467,7 @@ export function simulateWrite(input, rawDiskContent) {
 
     const diskContent = normalizeLineEndings(rawDiskContent);
 
-    if (input.toolName === 'write_to_file') {
+    if (FULL_WRITE_TOOLS.has(input.toolName)) {
         return { ok: true, afters: [normalizeLineEndings(input.codeContent ?? '')] };
     }
 
@@ -591,7 +600,7 @@ export function detectApprovalTransition(input, rawDiskContent) {
 
     if (beforeStatus && UNLOCKING.has(beforeStatus.toLowerCase())) {
         const allowedTransitions = new Set(['in progress', 'completed', 'superseded']);
-        if (input.toolName === 'write_to_file') {
+        if (FULL_WRITE_TOOLS.has(input.toolName)) {
             return { code: 'APPROVED_PLAN_LOCKED', reason: '[APPROVED_PLAN_LOCKED] write_to_file trên plan đã duyệt bị cấm' };
         }
         if (!input.chunks || input.chunks.length !== 1) {

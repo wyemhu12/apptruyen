@@ -27,7 +27,7 @@
 - `curl.exe -q -s <url>` hoặc `curl.exe -q -sI --max-time N <url>`: tải HTML hoặc header của nguồn truyện để đối chiếu CSS selector, mã HTTP.
   * Tham số đầu tiên BẮT BUỘC là `-q` (bỏ qua `.curlrc`).
   * Chỉ chấp nhận các cờ read-only: `-s`, `-S`, `-I`, `--compressed`, `--max-time N` (hoặc `-m N`), `-A "<UA>"` (hoặc `--user-agent "<UA>"`). User-Agent không chứa dấu `;`.
-  * Đúng MỘT URL bare `https://` thuộc danh sách host nguồn: `truyencom.com`, `truyenfull.today`, `sstruyen.net`, `tangthuvien.org`, `lacatruyen.buzz`, `www.lacatruyen.buzz`, `lacatruyen.world`, `www.lacatruyen.world`.
+  * Đúng MỘT URL bare `https://` thuộc danh sách host nguồn: `truyencom.com`, `truyenfull.today`, `sstruyen.net`, `sstruyen.pics`, `api.sstruyen.pics`, `file.sstruyen.pics`, `tangthuvien.org`, `wikicv.org`, `lacatruyen.buzz`, `www.lacatruyen.buzz`, `lacatruyen.world`, `www.lacatruyen.world`.
   * CẤM `-L` (redirect), `-o/-O/--output`, `-d/--data`, `-X`, `-F`, `-c/-b` (cookie), `-u`, `-x` (proxy), `-K/--config`.
   * Mọi lệnh mạng khác (`curl` alias PowerShell, `wget`, `Invoke-WebRequest`, `iwr`, `irm`...) đều bị hook hỏi User xác nhận.
 - `Get-Content`, `Get-ChildItem`, `Select-String -Path ... -Pattern "..."`, `Test-Path`, `Get-Item`, `Resolve-Path`: đọc file trong repo (trừ file secret). Đường dẫn chỉ nằm trong working tree, không chứa wildcard/provider/thiết bị Windows (`NUL`, `CON`, `AUX`, `PRN`, `COM1-9`, `LPT1-9`).
@@ -50,6 +50,8 @@
 ```text
 # hook-allow-examples
 curl.exe -q -s https://truyenfull.today/
+curl.exe -q -s https://sstruyen.pics/
+curl.exe -q -s https://wikicv.org/
 curl.exe -q -sI --max-time 10 https://www.lacatruyen.buzz/
 git status
 git diff --stat

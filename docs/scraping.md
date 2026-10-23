@@ -1,6 +1,6 @@
 # Hướng dẫn Scraping
 
-> **Cập nhật lần cuối:** 2026-10-19 04:20
+> **Cập nhật lần cuối:** 2026-10-23 20:25
 
 ## Nguồn hoạt động hiện tại
 
@@ -35,8 +35,10 @@ Wikidich là nguồn truyện convert phong phú. Sử dụng cookie session `ex
   fuzzy = text.substring(cut) + text.substring(0, cut)
   sign = SHA256(fuzzy).lowercase()
   ```
-- Phân trang: Đọc selector `ul.pagination li a[data-action="loadBookIndex"][data-start=...]` để xác định trang kế tiếp.
-- **Số chương trong danh sách**: Thẻ `.book-item` trên trang tìm kiếm không chứa số chương; `WikidichScraper` trích xuất số chương từ link `"Mới nhất"` (`.cover-info a[href*='/truyen/']`) trên trang chi tiết qua `extractTotalChaptersFromDetail()` và làm giàu song song (`enrichWithChapterCounts()`, batch 5, timeout 7s).
+- Phân trang: Đọc selector `ul.pagination li a[data-action="loadBookIndex"][data-start=...]` để xác định trang kế tiếp; `totalPages` được tính từ `maxStart` (`(maxStart / 99) + 1`) kết hợp số trang hiển thị để không bị cắt ở 5 trang với truyện dài hàng nghìn chương.
+- **Số chương trên trang chi tiết & trong danh sách tìm kiếm**:
+  - Thẻ `.book-item` trên trang tìm kiếm không chứa số chương; `WikidichScraper.search()` làm giàu số chương cho tối đa 5 kết quả đầu (`ENRICH_MAX_ITEMS = 5`, `ENRICH_BATCH_SIZE = 2`, có `delay(crawlDelayMs)` giữa các lô và dừng sớm qua `AtomicBoolean` khi gặp HTTP `403`/`429`/`503` hoặc `LoginRequiredException`).
+  - Trên trang chi tiết, `extractTotalChaptersFromDetail()` quét `.cover-info a[href*='/truyen/']` với `LATEST_CHAPTER_TEXT_REGEX` và `LATEST_CHAPTER_HREF_REGEX`. Nếu truyện đã hoàn thành không hiện dòng `"Mới nhất"` hoặc chương cuối là phiên ngoại (trả về `0`), `fetchTotalChaptersFromBookIndex()` tự động truy vấn `/book/index` tại `start = 0` và nhảy theo `data-start` lớn nhất (tối đa 2 bước nhảy) để đếm chính xác tổng số chương, đồng thời lưu vào `ajaxFragmentCache` (TTL 10 phút, tối đa 30 mục) để `getFirstPageChapters()` tái sử dụng ngay lập tức mà không tốn thêm request mạng.
 
 ### CSS Selectors
 ```css

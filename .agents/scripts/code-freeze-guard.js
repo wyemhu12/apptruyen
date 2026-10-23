@@ -93,7 +93,11 @@ export const SOURCE_HOSTS = Object.freeze([
     'truyencom.com',
     'truyenfull.today',
     'sstruyen.net',
+    'sstruyen.pics',
+    'api.sstruyen.pics',
+    'file.sstruyen.pics',
     'tangthuvien.org',
+    'wikicv.org',
     'lacatruyen.buzz',
     'www.lacatruyen.buzz',
     'lacatruyen.world',
@@ -684,6 +688,19 @@ export function unwrapJsonString(value) {
     }
 }
 
+const FULL_WRITE_TOOLS = new Set(['write_to_file', 'write_file', 'Write']);
+const WRITE_EDIT_TOOLS = new Set([
+    'write_to_file',
+    'write_file',
+    'Write',
+    'replace_file_content',
+    'edit_file',
+    'Edit',
+    'multi_replace_file_content',
+    'MultiEdit'
+]);
+const READ_TOOLS = new Set(['Read', 'read_file', 'view_file']);
+
 export function extractInput(payload, approvalApi = null) {
     const root = /** @type {Record<string, any>} */ (payload ?? {});
     const args = root.toolCall?.args ?? root.tool_input ?? {};
@@ -694,7 +711,9 @@ export function extractInput(payload, approvalApi = null) {
                 ? root.tool_name
                 : undefined;
 
-    const rawTarget = unwrapJsonString(args.TargetFile ?? args.file_path ?? args.path);
+    const rawTarget = unwrapJsonString(
+        args.TargetFile ?? args.Path ?? args.AbsolutePath ?? args.file_path ?? args.path
+    );
     const targetFile = typeof rawTarget === 'string' ? rawTarget : undefined;
 
     const rawCommand = unwrapJsonString(args.CommandLine ?? args.Command ?? args.command);
@@ -702,7 +721,7 @@ export function extractInput(payload, approvalApi = null) {
 
     const stepIdx = root.stepIdx ?? root.step_idx ?? root.toolCall?.stepIdx;
 
-    if (approvalApi && toolName && ['write_to_file', 'replace_file_content', 'multi_replace_file_content'].includes(toolName)) {
+    if (approvalApi && toolName && WRITE_EDIT_TOOLS.has(toolName)) {
         const norm = approvalApi.normalizeToolArgs(toolName, { ...args, stepIdx });
         let newContent = norm.codeContent;
         let oldContent;
@@ -712,7 +731,7 @@ export function extractInput(payload, approvalApi = null) {
             newContent = norm.chunks.map((c) => c.replacementContent).join('\n');
         }
 
-        if (toolName === 'write_to_file' && oldContent === undefined && targetFile) {
+        if (FULL_WRITE_TOOLS.has(toolName) && oldContent === undefined && targetFile) {
             try {
                 const absolute = path.resolve(REPO_ROOT, toPosix(targetFile));
                 if (fs.existsSync(absolute) && fs.statSync(absolute).isFile()) {
@@ -736,25 +755,44 @@ export function extractInput(payload, approvalApi = null) {
 
     let newContent;
     let oldContent;
-    if (Array.isArray(args.ReplacementChunks) && args.ReplacementChunks.length > 0) {
+    const rawChunks = Array.isArray(args.ReplacementChunks)
+        ? args.ReplacementChunks
+        : Array.isArray(args.edits)
+            ? args.edits
+            : null;
+    if (rawChunks && rawChunks.length > 0) {
         const oldParts = [];
         const newParts = [];
-        for (const chunk of args.ReplacementChunks) {
+        for (const chunk of rawChunks) {
             if (chunk && typeof chunk === 'object') {
-                if (typeof chunk.TargetContent === 'string') oldParts.push(chunk.TargetContent);
-                if (typeof chunk.ReplacementContent === 'string') newParts.push(chunk.ReplacementContent);
+                const cOld = chunk.TargetContent ?? chunk.Target ?? chunk.old_string;
+                const cNew = chunk.ReplacementContent ?? chunk.Replacement ?? chunk.new_string;
+                if (typeof cOld === 'string') oldParts.push(cOld);
+                if (typeof cNew === 'string') newParts.push(cNew);
             }
         }
         if (oldParts.length > 0) oldContent = oldParts.join('\n');
         if (newParts.length > 0) newContent = newParts.join('\n');
     } else {
-        const rawNew = args.CodeContent ?? args.ReplacementContent ?? args.content ?? args.new_content;
+        const rawNew =
+            args.CodeContent ??
+            args.Content ??
+            args.ReplacementContent ??
+            args.Replacement ??
+            args.new_string ??
+            args.content ??
+            args.new_content;
         newContent = typeof rawNew === 'string' ? rawNew : undefined;
-        const rawOld = args.TargetContent ?? args.old_content ?? args.target_content;
+        const rawOld =
+            args.TargetContent ??
+            args.Target ??
+            args.old_string ??
+            args.old_content ??
+            args.target_content;
         oldContent = typeof rawOld === 'string' ? rawOld : undefined;
     }
 
-    if (toolName === 'write_to_file' && oldContent === undefined && targetFile) {
+    if (FULL_WRITE_TOOLS.has(toolName ?? '') && oldContent === undefined && targetFile) {
         try {
             const absolute = path.resolve(REPO_ROOT, toPosix(targetFile));
             if (fs.existsSync(absolute) && fs.statSync(absolute).isFile()) {
@@ -779,6 +817,17 @@ export function decide(input, options = {}) {
 
     if (input.targetFile) {
         const relative = toRepoRelative(input.targetFile);
+
+        if (input.toolName && READ_TOOLS.has(input.toolName)) {
+            if (relative === null) {
+                if (isAntigravityArtifact(input.targetFile)) return { decision: 'allow' };
+                return ask(`⚠️ Security Guard: read targets a path outside the repository: ${input.targetFile}`);
+            }
+            if (relative.includes('.gemini/') || relative.startsWith('.git/') || isSecretPath(relative)) {
+                return ask(`⚠️ Security Guard: reading secret or prohibited path is blocked: ${relative}`);
+            }
+            return { decision: 'allow' };
+        }
 
         if (relative === null) {
             if (isAntigravityArtifact(input.targetFile)) return { decision: 'allow' };
@@ -835,6 +884,9 @@ export function decide(input, options = {}) {
         }
 
         if (UNFROZEN_PREFIXES.some((p) => pk.startsWith(p)) || UNFROZEN_FILES.includes(pk)) {
+            if (!pk.endsWith('.md')) {
+                return ask(`⚠️ Code Freeze Guard: only .md files are allowed inside unfrozen documentation paths (${relative}).`);
+            }
             return { decision: 'allow' };
         }
 
@@ -962,6 +1014,24 @@ export function decide(input, options = {}) {
     return ask('⚠️ Code Freeze Guard: tool call carries no recognisable target — failing closed.');
 }
 
+export function formatHookOutput(result, rawPayload) {
+    const root = /** @type {Record<string, any>} */ (rawPayload ?? {});
+    if (root.hook_event_name === 'PreToolUse') {
+        if (result.decision === 'allow') {
+            return null;
+        }
+        const permissionDecision = root.permission_mode === 'dontAsk' ? 'deny' : 'ask';
+        return {
+            hookSpecificOutput: {
+                hookEventName: 'PreToolUse',
+                permissionDecision,
+                ...(result.reason ? { permissionDecisionReason: result.reason } : {})
+            }
+        };
+    }
+    return result;
+}
+
 async function main() {
     const isPostEvent = process.argv.includes('--event') && process.argv[process.argv.indexOf('--event') + 1] === 'post';
 
@@ -1017,7 +1087,10 @@ async function main() {
 
         const input = extractInput(payload, approvalApi);
         const result = decide(input, { approvalApi });
-        process.stdout.write(JSON.stringify(result));
+        const formatted = formatHookOutput(result, payload);
+        if (formatted !== null) {
+            process.stdout.write(JSON.stringify(formatted));
+        }
     });
 }
 

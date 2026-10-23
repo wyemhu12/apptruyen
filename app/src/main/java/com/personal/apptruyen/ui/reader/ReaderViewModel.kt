@@ -108,6 +108,7 @@ sealed interface ReaderIntent {
     // Scroll
     data class SaveScrollPosition(
         val position: Int,
+        val chapterNumber: Int = -1,
     ) : ReaderIntent
 
     // Auto-scroll
@@ -282,7 +283,7 @@ class ReaderViewModel
                             intent.to,
                         )
                     }
-                is ReaderIntent.SaveScrollPosition -> saveScrollPosition(intent.position)
+                is ReaderIntent.SaveScrollPosition -> saveScrollPosition(intent.position, intent.chapterNumber)
                 is ReaderIntent.ToggleAutoScroll -> toggleAutoScroll()
                 is ReaderIntent.SetAutoScrollSpeed -> setAutoScrollSpeed(intent.speed)
                 is ReaderIntent.TogglePokemonLookup -> togglePokemonLookup()
@@ -296,7 +297,7 @@ class ReaderViewModel
 
         init {
             loadDefaultSettings()
-            loadChapter(chapterNumber, chapterUrl)
+            loadChapter(chapterNumber, chapterUrl, restoreSavedScroll = true)
             loadChapterList()
             observeTtsForAutoAdvance()
             observeSkipEvents()
@@ -552,12 +553,14 @@ class ReaderViewModel
             url: String,
             autoPlay: Boolean = false,
             scrollToEnd: Boolean = false,
+            restoreSavedScroll: Boolean = false,
         ) {
             loadChapterJob?.cancel()
             reprocessJob?.cancel()
             pokemonMatchJob?.cancel()
 
-            if (number != _state.value.currentChapterNumber || scrollToEnd) {
+            val isSameChapter = number == _state.value.currentChapterNumber
+            if (!isSameChapter || scrollToEnd) {
                 currentScrollPosition = 0
             }
             val resolvedUrl = chapters.find { it.chapterNumber == number }?.url?.takeIf { it.isNotBlank() } ?: url
@@ -589,17 +592,18 @@ class ReaderViewModel
 
                         settingsLoadedDeferred.await()
 
-                        val savedProgress =
-                            runCatching {
-                                readingProgressRepository.getReadingProgress(storyId)
-                            }.getOrNull()
-                        if (!scrollToEnd &&
-                            savedProgress != null &&
-                            savedProgress.lastChapterNumber == number &&
-                            savedProgress.scrollPosition > 0
-                        ) {
-                            currentScrollPosition = savedProgress.scrollPosition
-                        } else if (scrollToEnd) {
+                        if (restoreSavedScroll && !scrollToEnd) {
+                            val savedProgress =
+                                runCatching {
+                                    readingProgressRepository.getReadingProgress(storyId)
+                                }.getOrNull()
+                            if (savedProgress != null &&
+                                savedProgress.lastChapterNumber == number &&
+                                savedProgress.scrollPosition > 0
+                            ) {
+                                currentScrollPosition = savedProgress.scrollPosition
+                            }
+                        } else if (!isSameChapter || scrollToEnd) {
                             currentScrollPosition = 0
                         }
 
@@ -708,7 +712,11 @@ class ReaderViewModel
 
         /** Retry loading the current chapter (called from error state UI) */
         fun retryLoadChapter() {
-            loadChapter(_state.value.currentChapterNumber, currentChapterUrl)
+            loadChapter(
+                _state.value.currentChapterNumber,
+                currentChapterUrl,
+                restoreSavedScroll = currentScrollPosition == 0,
+            )
         }
 
         /**
@@ -1085,11 +1093,26 @@ class ReaderViewModel
             loadChapter(chapter.chapterNumber, chapter.url, autoPlay = wasActive)
         }
 
-        fun saveScrollPosition(position: Int) {
+        fun saveScrollPosition(
+            position: Int,
+            chapterNumber: Int = -1,
+        ) {
+            val currentState = _state.value
+            if (currentState.isLoading ||
+                currentState.isLoadingNextChapter ||
+                currentState.isLoadingPrevChapter ||
+                currentState.error != null ||
+                currentState.paragraphs.isEmpty()
+            ) {
+                return
+            }
+            if (chapterNumber != -1 && chapterNumber != currentState.currentChapterNumber) {
+                return
+            }
             val safePos = position.coerceAtLeast(0)
             currentScrollPosition = safePos
             _state.update { it.copy(initialScrollIndex = safePos) }
-            val chapterNum = _state.value.currentChapterNumber
+            val chapterNum = currentState.currentChapterNumber
             // Dùng appScope thay vì viewModelScope vì khi user bấm Back,
             // viewModelScope bị cancel trong onCleared() TRƯỚC KHI DisposableEffect
             // onDispose() kịp gọi saveScrollPosition() → progress mất.

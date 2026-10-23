@@ -15,6 +15,7 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.jsoup.Jsoup
 import org.jsoup.nodes.Document
+import timber.log.Timber
 import java.net.URLEncoder
 import java.security.MessageDigest
 import javax.inject.Inject
@@ -40,22 +41,37 @@ class WikidichScraper
             builder.header("Referer", "$baseUrl/")
         }
 
+        private val ajaxFragmentCache: MutableMap<String, CacheEntry> =
+            java.util.Collections.synchronizedMap(
+                object : LinkedHashMap<String, CacheEntry>(MAX_AJAX_CACHE_SIZE + 1, 0.75f, false) {
+                    override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, CacheEntry>?): Boolean = size > MAX_AJAX_CACHE_SIZE
+                },
+            )
+
         companion object {
             private const val DEFAULT_PAGE_SIZE = 99
             private const val MAX_PAGINATION_PAGES = 200
             private const val SEARCH_PAGE_SIZE = 20
-            private const val ENRICH_BATCH_SIZE = 5
+            private const val ENRICH_MAX_ITEMS = 5
+            private const val ENRICH_BATCH_SIZE = 2
             private const val ENRICH_TIMEOUT_MS = 3_500L
+            private const val MAX_PAGINATION_JUMPS = 2
+            private const val MAX_AJAX_CACHE_SIZE = 30
+            private const val AJAX_CACHE_TTL_MS = 10 * 60 * 1000L
             private const val DESKTOP_UA =
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
 
             private val WATERMARK_REGEX = Regex("【❁.*\\(Wikidich\\).*❁】", RegexOption.IGNORE_CASE)
             private val LATEST_CHAPTER_TEXT_REGEX =
                 Regex(
-                    "(?:Chương|Hồi|Phần|Quyển\\s*\\d+\\s*[-–:]?\\s*Chương)\\s*(\\d+)",
+                    """(?:(?:Quyển|Phần)\s*\d+\s*[-–—:.,]?\s*)?(?:Chương|Hồi|Tiết|Phần|Đệ)\s*(\d+)|第\s*(\d+)\s*[章回節节]|^\s*(\d{1,5})(?:\s*[.:,\-–—]\s*|\s+)""",
                     RegexOption.IGNORE_CASE,
                 )
-            private val LATEST_CHAPTER_HREF_REGEX = Regex("/chuong-(\\d+)", RegexOption.IGNORE_CASE)
+            private val LATEST_CHAPTER_HREF_REGEX =
+                Regex(
+                    """/(?:quyen-\d+-)?(?:chuong|hoi|tiet|phan)-(\d+)(?:[-~]|$)""",
+                    RegexOption.IGNORE_CASE,
+                )
 
             val GENRE_QUERY_MAP =
                 mapOf(
@@ -125,11 +141,7 @@ class WikidichScraper
                     } else {
                         stories
                     }
-                if (customBaseUrl != null && enrichInTests) {
-                    enrichWithChapterCounts(filtered, maxItems = 5)
-                } else {
-                    filtered
-                }
+                enrichWithChapterCounts(filtered, maxItems = ENRICH_MAX_ITEMS)
             }
 
         override suspend fun getStoryDetail(storyUrl: String): Story =
@@ -173,7 +185,13 @@ class WikidichScraper
                         "Đang ra"
                     }
 
-                val totalChapters = extractTotalChaptersFromDetail(doc)
+                val extractedTotal = extractTotalChaptersFromDetail(doc)
+                val totalChapters =
+                    if (extractedTotal > 0) {
+                        extractedTotal
+                    } else {
+                        fetchTotalChaptersFromBookIndex(doc, storyUrl)
+                    }
                 val slug = extractSlug(storyUrl)
 
                 Story(
@@ -210,12 +228,15 @@ class WikidichScraper
                 }
 
                 val paginationLinks = fragmentDoc.select("ul.pagination li a[data-action='loadBookIndex']")
-                val totalPages =
-                    if (paginationLinks.isNotEmpty()) {
-                        paginationLinks.mapNotNull { it.text().toIntOrNull() }.maxOrNull() ?: 1
-                    } else {
-                        1
-                    }
+                val maxStart =
+                    paginationLinks
+                        .mapNotNull { it.attr("data-start").toIntOrNull() }
+                        .maxOrNull() ?: 0
+                val maxPageFromText =
+                    paginationLinks
+                        .mapNotNull { it.text().trim().toIntOrNull() }
+                        .maxOrNull() ?: 1
+                val totalPages = maxOf((maxStart / DEFAULT_PAGE_SIZE) + 1, maxPageFromText)
 
                 StorySource.FirstPageResult(
                     chapters = chapters,
@@ -378,21 +399,25 @@ class WikidichScraper
             )
 
         internal fun extractTotalChaptersFromDetail(doc: Document): Int {
+            val coverLinks = doc.select(".cover-info a[href*='/truyen/']")
             val latestLink =
-                doc.select(".cover-info a[href*='/truyen/']").lastOrNull { a ->
+                coverLinks.lastOrNull { a ->
                     val href = a.attr("href")
-                    href.contains("/chuong-") || a.parent()?.text()?.contains("Mới nhất", ignoreCase = true) == true
-                } ?: doc.select(".cover-info a[href*='/truyen/']").lastOrNull()
+                    LATEST_CHAPTER_HREF_REGEX.containsMatchIn(href) ||
+                        a.parent()?.text()?.contains("Mới nhất", ignoreCase = true) == true
+                } ?: coverLinks.lastOrNull { a ->
+                    a.attr("href").trimEnd('/').count { it == '/' } >= 3
+                }
 
             if (latestLink != null) {
                 val linkText = latestLink.text().trim()
                 val textMatches = LATEST_CHAPTER_TEXT_REGEX.findAll(linkText).toList()
                 if (textMatches.isNotEmpty()) {
+                    val lastMatch = textMatches.last()
                     val num =
-                        textMatches
-                            .last()
-                            .groupValues
-                            .getOrNull(1)
+                        lastMatch.groupValues
+                            .drop(1)
+                            .firstOrNull { it.isNotEmpty() }
                             ?.toIntOrNull()
                     if (num != null && num > 0) return num
                 }
@@ -405,40 +430,125 @@ class WikidichScraper
             return 0
         }
 
+        /**
+         * Fallback khi khối .cover-info trên trang chi tiết không có số chương (ví dụ chương mới nhất là Phiên ngoại
+         * hoặc truyện chỉ hiện nhãn Hoàn thành). Gọi AJAX /book/index trang đầu (start=0), kiểm tra thanh phân trang
+         * data-start lớn nhất và đếm số chương ở trang cuối.
+         */
+        internal suspend fun fetchTotalChaptersFromBookIndex(
+            doc: Document,
+            storyUrl: String,
+        ): Int =
+            runCatching {
+                val (bookId, cut, signKey) = extractSecurityParams(doc.html(), storyUrl)
+                val firstSign = makeBookIndexSign(signKey, 0, DEFAULT_PAGE_SIZE, cut)
+                val firstUrl =
+                    "$baseUrl/book/index?bookId=$bookId&start=0&size=$DEFAULT_PAGE_SIZE&signKey=$signKey&sign=$firstSign"
+                val firstHtml = fetchAjaxFragment(firstUrl, storyUrl)
+                val firstDoc = Jsoup.parseBodyFragment(firstHtml)
+                val firstPageCount = firstDoc.select("li.chapter-name a[href^='/truyen/']").size
+                if (firstPageCount == 0) return@runCatching 0
+
+                var currentStart =
+                    firstDoc
+                        .select("ul.pagination li a[data-action='loadBookIndex']")
+                        .mapNotNull { it.attr("data-start").toIntOrNull() }
+                        .maxOrNull() ?: 0
+
+                if (currentStart <= 0) {
+                    return@runCatching firstPageCount
+                }
+
+                var jumps = 0
+                var lastDoc = firstDoc
+                var visitedStart = 0
+                while (currentStart > visitedStart && jumps < MAX_PAGINATION_JUMPS) {
+                    visitedStart = currentStart
+                    val pageSign = makeBookIndexSign(signKey, currentStart, DEFAULT_PAGE_SIZE, cut)
+                    val pageUrl =
+                        "$baseUrl/book/index?bookId=$bookId&start=$currentStart&size=$DEFAULT_PAGE_SIZE&signKey=$signKey&sign=$pageSign"
+                    val pageHtml = fetchAjaxFragment(pageUrl, storyUrl)
+                    lastDoc = Jsoup.parseBodyFragment(pageHtml)
+                    val nextMaxStart =
+                        lastDoc
+                            .select("ul.pagination li a[data-action='loadBookIndex']")
+                            .mapNotNull { it.attr("data-start").toIntOrNull() }
+                            .maxOrNull() ?: currentStart
+                    if (nextMaxStart > currentStart) {
+                        currentStart = nextMaxStart
+                    }
+                    jumps++
+                }
+
+                val lastPageCount = lastDoc.select("li.chapter-name a[href^='/truyen/']").size
+                if (lastPageCount > 0) {
+                    visitedStart + lastPageCount
+                } else {
+                    visitedStart
+                }
+            }.getOrElse { e ->
+                if (e is CancellationException) throw e
+                Timber.w(e, "WikidichScraper: Failed to fetch total chapters from /book/index for %s", storyUrl)
+                0
+            }
+
         private suspend fun enrichWithChapterCounts(
             stories: List<Story>,
-            maxItems: Int = 10,
+            maxItems: Int = ENRICH_MAX_ITEMS,
         ): List<Story> {
             if (stories.isEmpty() || maxItems <= 0) return stories
             if (customBaseUrl != null && !enrichInTests) return stories
 
             val toEnrich = stories.take(maxItems)
             val remaining = stories.drop(maxItems)
+            val abortEnrich =
+                java.util.concurrent.atomic
+                    .AtomicBoolean(false)
 
             val enriched =
                 coroutineScope {
-                    toEnrich.chunked(ENRICH_BATCH_SIZE).flatMap { batch ->
-                        batch
-                            .map { story ->
-                                async {
-                                    if (story.totalChapters > 0) {
-                                        story
-                                    } else {
-                                        try {
-                                            withTimeoutOrNull(ENRICH_TIMEOUT_MS) {
-                                                val detailDoc = fetchDocumentWithRetry(story.url)
-                                                val total = extractTotalChaptersFromDetail(detailDoc)
-                                                if (total > 0) story.copy(totalChapters = total) else story
-                                            } ?: story
-                                        } catch (e: CancellationException) {
-                                            throw e
-                                        } catch (_: Exception) {
+                    val batches = toEnrich.chunked(ENRICH_BATCH_SIZE)
+                    val results = mutableListOf<Story>()
+                    for ((batchIndex, batch) in batches.withIndex()) {
+                        if (abortEnrich.get()) {
+                            results.addAll(batch)
+                            continue
+                        }
+                        if (batchIndex > 0) {
+                            delay(crawlDelayMs)
+                        }
+                        val batchResult =
+                            batch
+                                .map { story ->
+                                    async {
+                                        if (story.totalChapters > 0 || abortEnrich.get()) {
                                             story
+                                        } else {
+                                            try {
+                                                withTimeoutOrNull(ENRICH_TIMEOUT_MS) {
+                                                    val detailDoc = fetchDocument(story.url)
+                                                    val total = extractTotalChaptersFromDetail(detailDoc)
+                                                    if (total > 0) story.copy(totalChapters = total) else story
+                                                } ?: story
+                                            } catch (e: CancellationException) {
+                                                throw e
+                                            } catch (e: ScraperException.HttpException) {
+                                                if (e.statusCode in setOf(403, 429, 503)) {
+                                                    abortEnrich.set(true)
+                                                }
+                                                story
+                                            } catch (_: ScraperException.LoginRequiredException) {
+                                                abortEnrich.set(true)
+                                                story
+                                            } catch (_: Exception) {
+                                                story
+                                            }
                                         }
                                     }
-                                }
-                            }.awaitAll()
+                                }.awaitAll()
+                        results.addAll(batchResult)
                     }
+                    results
                 }
             return enriched + remaining
         }
@@ -446,6 +556,7 @@ class WikidichScraper
         private fun checkLoginRequired(doc: Document) {
             if (doc.html().contains("Đăng nhập để xem nội dung")) {
                 cache.clear()
+                ajaxFragmentCache.clear()
                 throw ScraperException.LoginRequiredException(
                     sourceId = sourceId,
                     message = "Vui lòng đăng nhập để xem nội dung từ Wikidich",
@@ -584,6 +695,14 @@ class WikidichScraper
             url: String,
             referer: String,
         ): String {
+            ajaxFragmentCache[url]?.let { entry ->
+                if (nowMs() - entry.timestamp < AJAX_CACHE_TTL_MS) {
+                    return entry.body
+                } else {
+                    ajaxFragmentCache.remove(url)
+                }
+            }
+
             val request =
                 Request
                     .Builder()
@@ -602,7 +721,9 @@ class WikidichScraper
                         if (!response.isSuccessful) {
                             throw ScraperException.HttpException(response.code, url)
                         }
-                        return response.body.string()
+                        val body = response.body.string()
+                        ajaxFragmentCache[url] = CacheEntry(body = body, timestamp = nowMs())
+                        return body
                     }
                 } catch (e: CancellationException) {
                     throw e

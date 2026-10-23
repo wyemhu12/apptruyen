@@ -30,8 +30,8 @@ Adopt từ Project AURORA và Vikini. Tổng quan: `.agents/README.md`.
 - **Quy trình**: task không tầm thường đi theo `@planner` → Lead Reviewer (Claude CLI `.agents/scripts/run-claude.ps1`, dự phòng `@reviewer`) → `[PLAN_APPROVED]` → triển khai. Xem `.agents/rules/05-plan-review.md`
 - **Subagents**: `.agents/agents/planner`, `reviewer`, `qa` (`@qa` chỉ chạy khi User gọi)
 - **Code Freeze Guard**: hook `.agents/hooks.json` khóa code cho đến khi plan được duyệt, luôn hỏi khi sửa file nhạy cảm
-- **Workflows**: `/update-docs`, `/debug`, `/post-fix` trong `.agents/workflows/`
+- **Skills nội bộ**: `.agents/skills/apptruyen-{debug,audit,investigate,simplify}/SKILL.md` (cùng các skills chuyên biệt Android trong `.agents/skills/`)
 
 ## Tài liệu bắt buộc cập nhật sau khi thay đổi code
 
-Xem chi tiết trong quy tắc `.agents/rules/06-docs.md` hoặc dùng workflow `/update-docs`.
+Xem chi tiết trong quy tắc `.agents/rules/06-docs.md`.

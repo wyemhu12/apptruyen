@@ -38,6 +38,8 @@ Spec/thiết kế (nếu có) đặt ở [`docs/specs/`](../specs/).
 | 2026-10-16 | [Khắc phục toàn diện Audit Phase 2 (Reader, StoryDetail & TextFormatHelper)](./2026-10-16-audit-remediation-phase2-implementation-plan.md) | `Completed` | Khôi phục & bảo toàn `scrollPosition`, giữ độ sáng ở cấp gốc `ReaderScreen`, chặn crash `DownloadRangeDialog`, đồng bộ `settingsLoadedDeferred` + hủy `loadChapterJob` + giữ `contentCache` thô trên `Dispatchers.Default`, thống kê đọc theo `ON_RESUME`/`ON_PAUSE`, cố định `contentPadding`, `SelectionContainer` toàn danh sách, tìm kiếm chương `ChapterListPanel` & bảo vệ số thập phân/giờ/URL trong `TextFormatHelper`. |
 | 2026-10-19 | [Khắc phục toàn diện Audit Phase 3 (Core Screens, Navigation, WebView, TTS & System)](./2026-10-19-audit-remediation-phase3-implementation-plan.md) | `Completed` | Biểu đồ 7 ngày động & giữ `FilterChip` trên `HomeScreen`, bảo vệ công tắc nguồn cuối cùng & đồng bộ đăng nhập Wikidich trên `SettingsScreen`, chặn vòng lặp `loadMore` vô tận, lọc độc lập số chương/trạng thái trên `SearchScreen`, mã hóa Base64 URL-safe `NavigationUtils`, kiểm tra tên miền chặt `isAllowedDomain` & dọn `WebView` trong `finally`, retry `WikidichScraper`, bảo vệ `CrashHandler`, đồng bộ `collectAsStateWithLifecycle`, `WindowInsets`, `GridCells.Adaptive` & `TtsManager`/`TtsService`. |
 | 2026-10-19 | [Khắc phục Báo Cáo Kiểm Toán — Giai Đoạn 4 (Kiểm Thử, Build/Lint/ProGuard, Cookie/Cache & Tài Liệu)](./2026-10-19-audit-remediation-phase4-implementation-plan.md) | `Completed` | Bổ sung `TangThuVienScraperTest` (`MockWebServer`), xóa Mirror Tests (`TtsManagerTest`, `NavigationUtilsTest`, `StoryDetailViewModelTest`), chuẩn hóa `CookieTest`/`LacaTruyenApiTest`/`TestJsoup` & xóa `CryptoJS.kt`, bật `abortOnError = true` cho Android Lint + tinh chỉnh `proguard-rules.pro`, hoàn thiện `AndroidCookieStore.removeCookies` & `BaseScraper` Cache TTL 10 phút, khóa Cleartext HTTP, chuyển `android.util.Log` sang `Timber`, và đồng bộ tài liệu dự án. |
+| 2026-10-23 | [Sửa lỗi nhảy cuối chương khi vuốt sang chương tiếp theo & hiển thị số chương Wikidich](./2026-10-23-fix-reader-scroll-and-wikidich-chapter-count-implementation-plan.md) | `Completed` | Chống kích hoạt `DisposableEffect.onDispose` khi đổi chương trên `ReaderScreen`, gắn `chapterNumber` vào `SaveScrollPosition` & thêm `restoreSavedScroll` trong `ReaderViewModel`; bổ sung `fetchTotalChaptersFromBookIndex` + `ajaxFragmentCache` + bật `enrichWithChapterCounts` trong `WikidichScraper.search()`, đồng bộ `updateTotalChaptersIfGreater` trong `StoryRepository` và hiển thị `effectiveTotalChapters` trên `StoryDetailScreen`/`HomeScreen`. |
+| 2026-10-23 | [Nâng cấp Hệ thống Rules, Subagents & Skills theo Vikini Governance 2.0](./2026-10-23-adopt-vikini-governance-v2-implementation-plan.md) | `Completed` | Chuẩn hóa YAML frontmatter subagents (`model: pro`), Model Roster tháng 10/2026, Progressive Disclosure (`trigger: glob` cho `01-coding.md` & `03-ui.md`, tổng `always_on < 18.000` ký tự), tạo bộ 4 skills nội bộ (`apptruyen-debug`, `apptruyen-audit`, `apptruyen-investigate`, `apptruyen-simplify`) thay thế `.agents/workflows/`, gia cố `code-freeze-guard.js` (Layer 2 `.md`-only guard, Read Guard, bí danh công cụ, `formatHookOutput`) và đồng bộ 4 host nguồn truyện (`sstruyen.pics`, `api.sstruyen.pics`, `file.sstruyen.pics`, `wikicv.org`). |
 
 ---
 
@@ -51,16 +53,16 @@ BẮT BUỘC tuân thủ định dạng header chặt: H1 là dòng không trố
 > **Trạng thái**: Ready for Review
 > **Revision**: 1
 > **Ngày tạo**: YYYY-MM-DD
-> **Planner**: @planner (<model>)
+> **Planner**: @planner ([PLANNER_MODEL: <model>])
 
 ## Technical Plan
 
-### 1. Mục Tiêu
+### 1. Mục Tiêu (Goal) & Out of Scope (What We're NOT Doing)
 
-### 2. Pre-Work Reading
+### 2. Pre-Work Reading & Skills Loaded & Applied
 
-- `AGENTS.md`, `.agents/rules/00-core.md`, ...
-- File source đã đọc: ...
+- `AGENTS.md`, `.agents/rules/00-core.md`, `.agents/rules/02-quality.md`, ...
+- Bảng `SKILL.md` đã đọc và áp dụng: ...
 
 ### 3. Assumptions & Cross-Task Dependencies
 
@@ -69,7 +71,7 @@ BẮT BUỘC tuân thủ định dạng header chặt: H1 là dòng không trố
 | Thư viện | Version hiện tại | Version đề xuất | Latest đã xác minh | Nguồn URL | Tương thích? |
 | -------- | ---------------- | --------------- | ------------------ | --------- | ------------ |
 
-### 5. Files Cần Chỉnh Sửa / Tạo Mới
+### 5. Files Cần Chỉnh Sửa / Tạo Mới & Caller-First Design Sketch
 
 | Nhãn       | File | Tầng | Ghi chú (file nhạy cảm → lý do) |
 | ---------- | ---- | ---- | ------------------------------- |
@@ -94,7 +96,7 @@ BẮT BUỘC tuân thủ định dạng header chặt: H1 là dòng không trố
 - Unit test: `app/src/test/java/com/personal/apptruyen/...Test.kt`
 - Lệnh: `.\gradlew.bat ktlintCheck; .\gradlew.bat testDebugUnitTest; .\gradlew.bat assembleDebug`
 - Kiểm thử thủ công trên thiết bị: ...
-- Negative probe (nếu thêm rule enforcement): ...
+- Wiring Probe & Negative Probe (nếu thêm rule/guard/validation): ...
 
 ### 9. Rủi Ro & Phòng Ngừa
 

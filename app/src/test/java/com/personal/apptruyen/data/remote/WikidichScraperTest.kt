@@ -346,4 +346,261 @@ class WikidichScraperTest {
             assertEquals("https://cdn.truyenwikidich.net/covers/a.jpg", stories[0].coverImageUrl)
             assertEquals("http://localhost:8080/covers/b.jpg", stories[1].coverImageUrl)
         }
+
+    @Test
+    fun `extractTotalChaptersFromDetail parses varied chapter formats in cover-info and ignores links outside cover-info`() {
+        val docVolume =
+            org.jsoup.Jsoup.parse(
+                """
+                <html><body>
+                  <div class="cover-info">
+                    <p>Mới nhất: <a href="/truyen/test/quyen-3-chuong-245-ket">Quyển 3 - Chương 245: Đại kết cục</a></p>
+                  </div>
+                  <div class="related"><a href="/truyen/other/chuong-9999">Chương 9999</a></div>
+                </body></html>
+                """.trimIndent(),
+            )
+        assertEquals(245, scraper.extractTotalChaptersFromDetail(docVolume))
+
+        val docHoi =
+            org.jsoup.Jsoup.parse(
+                """
+                <html><body>
+                  <div class="cover-info"><p>Mới nhất: <a href="/truyen/test/hoi-180-abc">Hồi 180: Phong vân</a></p></div>
+                </body></html>
+                """.trimIndent(),
+            )
+        assertEquals(180, scraper.extractTotalChaptersFromDetail(docHoi))
+
+        val docTiet =
+            org.jsoup.Jsoup.parse(
+                """
+                <html><body>
+                  <div class="cover-info"><p>Mới nhất: <a href="/truyen/test/tiet-95-abc">Tiết 95: Ngoại truyện</a></p></div>
+                </body></html>
+                """.trimIndent(),
+            )
+        assertEquals(95, scraper.extractTotalChaptersFromDetail(docTiet))
+
+        val docLeadingNum =
+            org.jsoup.Jsoup.parse(
+                """
+                <html><body>
+                  <div class="cover-info"><p>Mới nhất: <a href="/truyen/test/c-abc">312. Chương kết</a></p></div>
+                </body></html>
+                """.trimIndent(),
+            )
+        assertEquals(312, scraper.extractTotalChaptersFromDetail(docLeadingNum))
+
+        val docChinese =
+            org.jsoup.Jsoup.parse(
+                """
+                <html><body>
+                  <div class="cover-info"><p>Mới nhất: <a href="/truyen/test/c-abc">第520章 结局</a></p></div>
+                </body></html>
+                """.trimIndent(),
+            )
+        assertEquals(520, scraper.extractTotalChaptersFromDetail(docChinese))
+
+        val docHrefOnly =
+            org.jsoup.Jsoup.parse(
+                """
+                <html><body>
+                  <div class="cover-info"><p>Mới nhất: <a href="/truyen/test/quyen-2-chuong-410-abc">Hoàn bổn cảm ngôn</a></p></div>
+                </body></html>
+                """.trimIndent(),
+            )
+        assertEquals(410, scraper.extractTotalChaptersFromDetail(docHrefOnly))
+
+        val docOutsideOnly =
+            org.jsoup.Jsoup.parse(
+                """
+                <html><body>
+                  <div class="cover-info"><p>Trạng thái: <a href="/tim-kiem?status=1">Hoàn thành</a></p></div>
+                  <div class="same-genre"><a href="/truyen/other-book/chuong-9999-abc">Chương 9999</a></div>
+                </body></html>
+                """.trimIndent(),
+            )
+        assertEquals(0, scraper.extractTotalChaptersFromDetail(docOutsideOnly))
+    }
+
+    @Test
+    fun `getStoryDetail falls back to fetchTotalChaptersFromBookIndex when cover-info has no chapter number`() =
+        runTest {
+            val detailHtml =
+                loadFixture("story_detail.html").replace(
+                    Regex("""<p[^>]*>\s*Mới nhất:[\s\S]*?</p>"""),
+                    """<p>Mới nhất: <a href="/truyen/sample/phien-ngoai-ket-cuc-Y1">Phiên ngoại: Đại kết cục</a></p>""",
+                )
+            val page0Html =
+                """
+                <ul class="pagination">
+                  <li class="active"><a href="#!" data-start="0" data-size="99" data-action="loadBookIndex">1</a></li>
+                  <li class="waves-effect"><a href="#!" data-start="198" data-size="99" data-action="loadBookIndex">3</a></li>
+                </ul>
+                <ul>
+                  ${(1..99).joinToString("\n") { """<li class="chapter-name"><a href="/truyen/sample/c-$it">Chương $it</a></li>""" }}
+                </ul>
+                """.trimIndent()
+            val pageLastHtml =
+                """
+                <ul class="pagination">
+                  <li class="waves-effect"><a href="#!" data-start="0" data-size="99" data-action="loadBookIndex">1</a></li>
+                  <li class="active"><a href="#!" data-start="198" data-size="99" data-action="loadBookIndex">3</a></li>
+                </ul>
+                <ul>
+                  ${(1..15).joinToString("\n") { """<li class="chapter-name"><a href="/truyen/sample/c-${198 + it}">Chương ${198 + it}</a></li>""" }}
+                </ul>
+                """.trimIndent()
+
+            server.dispatcher =
+                object : Dispatcher() {
+                    override fun dispatch(request: RecordedRequest): MockResponse {
+                        val path = request.url.encodedPath
+                        val query = request.url.query ?: ""
+                        return when {
+                            path.contains("/book/index") && query.contains("start=0") ->
+                                MockResponse(code = 200, body = page0Html)
+                            path.contains("/book/index") && query.contains("start=198") ->
+                                MockResponse(code = 200, body = pageLastHtml)
+                            else ->
+                                MockResponse(code = 200, body = detailHtml)
+                        }
+                    }
+                }
+
+            val story = scraper.getStoryDetail(server.url("/truyen/sample").toString())
+            assertEquals(213, story.totalChapters)
+        }
+
+    @Test
+    fun `getStoryDetail and getFirstPageChapters share ajaxFragmentCache for start 0 without duplicate HTTP request`() =
+        runTest {
+            val detailHtml =
+                loadFixture("story_detail.html").replace(
+                    Regex("""<p[^>]*>\s*Mới nhất:[\s\S]*?</p>"""),
+                    "",
+                )
+            val ajaxHtml =
+                """
+                <ul class="pagination">
+                  <li class="active"><a href="#!" data-start="0" data-size="99" data-action="loadBookIndex">1</a></li>
+                </ul>
+                <ul>
+                  ${(1..42).joinToString("\n") { """<li class="chapter-name"><a href="/truyen/sample/c-$it">Chương $it</a></li>""" }}
+                </ul>
+                """.trimIndent()
+
+            var startZeroAjaxCalls = 0
+            server.dispatcher =
+                object : Dispatcher() {
+                    override fun dispatch(request: RecordedRequest): MockResponse =
+                        if (request.url.encodedPath.contains("/book/index")) {
+                            startZeroAjaxCalls++
+                            MockResponse(code = 200, body = ajaxHtml)
+                        } else {
+                            MockResponse(code = 200, body = detailHtml)
+                        }
+                }
+
+            val storyUrl = server.url("/truyen/sample").toString()
+            val detail = scraper.getStoryDetail(storyUrl)
+            val firstPage = scraper.getFirstPageChapters(storyUrl)
+
+            assertEquals(42, detail.totalChapters)
+            assertEquals(42, firstPage.chapters.size)
+            assertEquals(1, startZeroAjaxCalls)
+        }
+
+    @Test
+    fun `getFirstPageChapters calculates totalPages from highest data-start in pagination`() =
+        runTest {
+            val storyHtml = loadFixture("story_detail.html")
+            val ajaxHtml =
+                """
+                <ul class="pagination">
+                  <li class="active"><a href="#!" data-start="0" data-size="99" data-action="loadBookIndex">1</a></li>
+                  <li class="waves-effect"><a href="#!" data-start="396" data-size="99" data-action="loadBookIndex">5</a></li>
+                  <li class="waves-effect"><a href="#!" data-start="1980" data-size="99" data-action="loadBookIndex">&gt;&gt;</a></li>
+                </ul>
+                <ul>
+                  <li class="chapter-name"><a href="/truyen/sample/c-1">Chương 1</a></li>
+                </ul>
+                """.trimIndent()
+
+            server.dispatcher =
+                object : Dispatcher() {
+                    override fun dispatch(request: RecordedRequest): MockResponse =
+                        if (request.url.encodedPath.contains("/book/index")) {
+                            MockResponse(code = 200, body = ajaxHtml)
+                        } else {
+                            MockResponse(code = 200, body = storyHtml)
+                        }
+                }
+
+            val result = scraper.getFirstPageChapters(server.url("/truyen/sample").toString())
+            assertEquals(21, result.totalPages)
+        }
+
+    @Test
+    fun `search enriches top stories and aborts early on HTTP 429 without failing search result`() =
+        runTest {
+            scraper.enrichInTests = true
+            val searchHtml =
+                """
+                <html><body>
+                  <div class="book-item">
+                    <div class="info-col"><a class="tooltipped" href="/truyen/s1">Truyện 1</a></div>
+                  </div>
+                  <div class="book-item">
+                    <div class="info-col"><a class="tooltipped" href="/truyen/s2">Truyện 2</a></div>
+                  </div>
+                  <div class="book-item">
+                    <div class="info-col"><a class="tooltipped" href="/truyen/s3">Truyện 3</a></div>
+                  </div>
+                </body></html>
+                """.trimIndent()
+            val detail1Html =
+                """
+                <html><body>
+                  <div class="cover-info">
+                    <h2>Truyện 1</h2>
+                    <p>Mới nhất: <a href="/truyen/s1/chuong-120">Chương 120: Mới</a></p>
+                  </div>
+                </body></html>
+                """.trimIndent()
+
+            var detail3Called = false
+            server.dispatcher =
+                object : Dispatcher() {
+                    override fun dispatch(request: RecordedRequest): MockResponse {
+                        val path = request.url.encodedPath
+                        return when {
+                            path.contains("/tim-kiem") -> MockResponse(code = 200, body = searchHtml)
+                            path.endsWith("/truyen/s1") -> MockResponse(code = 200, body = detail1Html)
+                            path.endsWith("/truyen/s2") -> MockResponse(code = 429, body = "Too Many Requests")
+                            path.endsWith("/truyen/s3") -> {
+                                detail3Called = true
+                                MockResponse(code = 200, body = detail1Html)
+                            }
+                            else -> MockResponse(code = 404, body = "Not Found")
+                        }
+                    }
+                }
+
+            val results = scraper.search("tien", completedOnly = false)
+            assertEquals(3, results.size)
+            assertEquals(120, results[0].totalChapters)
+            assertEquals(0, results[1].totalChapters)
+            assertEquals(0, results[2].totalChapters)
+            assertFalse(detail3Called)
+        }
+
+    @Test
+    fun `fetchTotalChaptersFromBookIndex returns zero gracefully on network or security param failure`() =
+        runTest {
+            val docWithoutParams = org.jsoup.Jsoup.parse("<html><body><div class='cover-info'><h2>Test</h2></div></body></html>")
+            val count = scraper.fetchTotalChaptersFromBookIndex(docWithoutParams, server.url("/truyen/no-params").toString())
+            assertEquals(0, count)
+        }
 }

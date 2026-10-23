@@ -364,7 +364,11 @@ private fun ReadingListContent(
                             progress = readFraction,
                             subtitle =
                                 if (progress != null) {
-                                    "Chương ${progress.lastChapterNumber}/${story.totalChapters}"
+                                    if (story.totalChapters > 0) {
+                                        "Chương ${progress.lastChapterNumber}/${story.totalChapters}"
+                                    } else {
+                                        "Chương ${progress.lastChapterNumber}"
+                                    }
                                 } else {
                                     null
                                 },

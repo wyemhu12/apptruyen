@@ -779,4 +779,128 @@ class StoryRepositoryTest {
             assertEquals("https://example.com/dl.jpg", downloaded.single().coverImageUrl)
             assertEquals("https://example.com/recent.jpg", recent.single().coverImageUrl)
         }
+
+    @Test
+    fun `getStoryDetail heals zero totalChapters from chapterDao and preserves higher totalChapters when fresh is lower`() =
+        runTest {
+            val cachedZeroEntity =
+                StoryEntity(
+                    id = "truyencom_story-1",
+                    slug = "story-1",
+                    title = "Truyện 1",
+                    author = "Tác giả",
+                    url = "https://truyencom.com/story-1/",
+                    totalChapters = 0,
+                    sourceId = "truyencom",
+                )
+            coEvery { storyDao.getStoryByUrl("https://truyencom.com/story-1/") } returns cachedZeroEntity
+            coEvery { chapterDao.getChapterCount("truyencom_story-1") } returns 150
+
+            val healedStory = storyRepository.getStoryDetail("https://truyencom.com/story-1/")
+            assertEquals(150, healedStory.totalChapters)
+            coVerify { storyDao.updateTotalChaptersIfGreater("truyencom_story-1", 150) }
+
+            // Nhánh không có cache URL nhưng có existingEntity = 485, trong khi remote trả về 148 (đánh số lại theo quyển)
+            val existingHighEntity =
+                StoryEntity(
+                    id = "truyencom_story-2",
+                    slug = "story-2",
+                    title = "Truyện 2",
+                    author = "Tác giả",
+                    url = "https://truyencom.com/story-2/",
+                    totalChapters = 485,
+                    sourceId = "truyencom",
+                )
+            coEvery { storyDao.getStoryByUrl("https://truyencom.com/story-2/") } returns null
+            coEvery { storyDao.getStoryById("truyencom_story-2") } returnsMany listOf(null, existingHighEntity)
+            coEvery { chapterDao.getChapterCount("truyencom_story-2") } returns 485
+            coEvery { source.getStoryDetail("https://truyencom.com/story-2/") } returns
+                Story(
+                    id = "truyencom_story-2",
+                    slug = "story-2",
+                    title = "Truyện 2",
+                    author = "Tác giả",
+                    url = "https://truyencom.com/story-2/",
+                    totalChapters = 148,
+                    sourceId = "truyencom",
+                )
+
+            val preservedStory = storyRepository.getStoryDetail("https://truyencom.com/story-2/")
+            assertEquals(485, preservedStory.totalChapters)
+            coVerify { storyDao.updateTotalChaptersIfGreater("truyencom_story-2", 485) }
+        }
+
+    @Test
+    fun `getFirstPageChapterList updates story totalChapters in DB via updateTotalChaptersIfGreater`() =
+        runTest {
+            val storyId = "wikidich_sample"
+            val storyUrl = "https://truyencom.com/sample/"
+            val chapters =
+                (1..99).map { num ->
+                    Chapter(storyId = storyId, chapterNumber = num, title = "Chương $num", url = "https://truyencom.com/sample/c-$num")
+                }
+            coEvery { chapterDao.getChaptersByStoryOnce(storyId) } returns emptyList()
+            coEvery { chapterDao.getChapterCount(storyId) } returns 99
+            coEvery { source.getFirstPageChapters(storyUrl) } returns
+                StorySource.FirstPageResult(chapters = chapters, totalPages = 5)
+
+            val result = storyRepository.getFirstPageChapterList(storyUrl, storyId)
+            assertEquals(99, result.first.size)
+            assertEquals(5, result.second)
+            coVerify { storyDao.updateTotalChaptersIfGreater(storyId, 99) }
+        }
+
+    @Test
+    fun `getChapterList updates story totalChapters to highest chapter count when full index is loaded`() =
+        runTest {
+            val storyId = "wikidich_full"
+            val storyUrl = "https://truyencom.com/full/"
+            val chapters =
+                (1..350).map { num ->
+                    Chapter(storyId = storyId, chapterNumber = num, title = "Chương $num", url = "https://truyencom.com/full/c-$num")
+                }
+            coEvery { chapterDao.getChaptersByStoryOnce(storyId) } returns emptyList()
+            coEvery { chapterDao.getChapterCount(storyId) } returns 350
+            coEvery { source.getChapterList(storyUrl) } returns chapters
+
+            val result = storyRepository.getChapterList(storyUrl, storyId)
+            assertEquals(350, result.size)
+            coVerify { storyDao.updateTotalChaptersIfGreater(storyId, 350) }
+        }
+
+    @Test
+    fun `refreshLibraryStories preserves monotonic totalChapters using existing and chapterDao count`() =
+        runTest {
+            val libStory =
+                StoryEntity(
+                    id = "wikidich_vol",
+                    slug = "vol",
+                    title = "Truyện Nhiều Quyển",
+                    author = "Tác giả",
+                    url = "https://truyencom.com/vol/",
+                    totalChapters = 485,
+                    isInLibrary = true,
+                    sourceId = "truyencom",
+                )
+            coEvery { storyDao.getLibraryStoriesOnce() } returns listOf(libStory)
+            coEvery { storyDao.getStoryById("wikidich_vol") } returns libStory
+            coEvery { chapterDao.getChapterCount("wikidich_vol") } returns 485
+            coEvery { source.getStoryDetail("https://truyencom.com/vol/") } returns
+                Story(
+                    id = "wikidich_vol",
+                    slug = "vol",
+                    title = "Truyện Nhiều Quyển",
+                    author = "Tác giả",
+                    url = "https://truyencom.com/vol/",
+                    totalChapters = 148,
+                    sourceId = "truyencom",
+                )
+            val savedSlot = slot<StoryEntity>()
+            coEvery { storyDao.insertStory(capture(savedSlot)) } just Runs
+
+            storyRepository.refreshLibraryStories()
+
+            assertEquals(485, savedSlot.captured.totalChapters)
+            coVerify { storyDao.updateTotalChaptersIfGreater("wikidich_vol", 485) }
+        }
 }

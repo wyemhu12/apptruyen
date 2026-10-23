@@ -5,59 +5,28 @@ description: Quy tắc cập nhật documentation sau mọi thay đổi code (ma
 
 # Quy tắc cập nhật documentation
 
-Sau **MỌI** thay đổi code, AI agent PHẢI cập nhật các file docs tương ứng (hoặc chạy workflow `/update-docs` tại `.agents/workflows/update-docs.md`). Ma trận thay đổi:
+Sau **MỌI** thay đổi code, AI agent PHẢI cập nhật các file docs tương ứng theo ma trận dưới đây:
 
 ## Ma trận: Khi nào cập nhật file nào
 
-- **Thêm/xóa file** → architecture, changelog
-- **Thay đổi database schema** → architecture, changelog
-- **Thêm dependency mới** → architecture, changelog
-- **Thay đổi kiến trúc** → architecture, changelog, contributing
-- **Hoàn thành/thêm task** → progress, changelog
-- **Sửa scraper/selectors** → changelog, scraping
-- **Thay đổi URL patterns** → changelog, scraping
-- **Thêm tính năng mới** → architecture, progress, changelog
-- **Fix bug** → changelog, lessons-learned (theo `.agents/workflows/post-fix.md`)
-- **Thay đổi coding convention** → contributing, `.agents/rules/01-coding.md`
-- **Hoàn thành một plan** → `docs/plans/README.md` (trạng thái), header plan `Trạng thái: Completed`
+- **Thêm/xóa file** → `docs/architecture.md`, `docs/changelog.md`
+- **Thay đổi database schema** → `docs/architecture.md`, `docs/changelog.md`
+- **Thêm dependency mới** → `docs/architecture.md`, `docs/changelog.md`
+- **Thay đổi kiến trúc** → `docs/architecture.md`, `docs/changelog.md`, `docs/contributing.md`
+- **Hoàn thành/thêm task** → `docs/progress.md`, `docs/changelog.md`
+- **Sửa scraper/selectors hoặc URL patterns** → `docs/changelog.md`, `docs/scraping.md`
+- **Thêm tính năng mới** → `docs/architecture.md`, `docs/progress.md`, `docs/changelog.md`
+- **Fix bug** → `docs/changelog.md`, `docs/lessons-learned.md` (theo `.agents/skills/apptruyen-debug/SKILL.md` §Part 2)
+- **Thay đổi coding convention** → `docs/contributing.md`, `.agents/rules/01-coding.md`
+- **Hoàn thành một plan** → `docs/plans/README.md` (bảng trạng thái), header plan `> **Trạng thái**: Completed`
 
 ## Chi tiết cập nhật từng file
 
-### `docs/architecture.md`
-
-- Cập nhật "Cấu trúc thư mục" nếu thêm/xóa file
-- Cập nhật "Database Schema" nếu thay đổi entities
-- Cập nhật "Dependencies chính" nếu thêm dependency
-- Cập nhật "Luồng dữ liệu" nếu thay đổi data flow
-- **Luôn cập nhật timestamp "Cập nhật lần cuối"**
-
-### `docs/progress.md`
-
-- Di chuyển task từ "Chưa làm" → "Hoàn thành" khi xong
-- Thêm task mới vào "Chưa làm" khi phát hiện cần làm thêm
-- Cập nhật bảng "Lịch sử thay đổi" cuối file
-- **Luôn cập nhật timestamp "Cập nhật lần cuối"**
-
-### `docs/changelog.md`
-
-- Thêm entry mới dưới `## [Unreleased]`
-- Format: `### Thêm mới`, `### Sửa đổi`, `### Xóa bỏ`, `### Fix bug`
-- Khi release version mới, chuyển entries từ Unreleased sang section version mới
-
-### `docs/scraping.md`
-
-- Cập nhật "CSS Selectors" nếu thay đổi selectors
-- Cập nhật "URL Patterns" nếu phát hiện URL mới
-- Thêm notes về edge cases mới
-
-### `docs/contributing.md`
-
-- Cập nhật nếu thay đổi coding conventions
-- Cập nhật "Quy trình thêm tính năng mới" nếu workflow thay đổi
-
-### `docs/lessons-learned.md`
-
-- Thêm entry sau mỗi bug fix: Triệu chứng / Nguyên nhân gốc / Cách sửa / Quy tắc phòng ngừa
+- **`docs/architecture.md`**: cập nhật "Cấu trúc thư mục", "Database Schema", "Dependencies chính", "Luồng dữ liệu" và timestamp "Cập nhật lần cuối".
+- **`docs/progress.md`**: chuyển task từ "Chưa làm" → "Hoàn thành", cập nhật bảng "Lịch sử thay đổi" và timestamp "Cập nhật lần cuối".
+- **`docs/changelog.md`**: thêm entry dưới `## [Unreleased]` (`### Thêm mới`, `### Sửa đổi`, `### Xóa bỏ`, `### Fix bug`). Khi release version mới, chuyển sang section version mới.
+- **`docs/scraping.md`**: cập nhật "CSS Selectors", "URL Patterns" và ghi chú edge cases mới.
+- **`docs/lessons-learned.md`**: thêm entry sau mỗi bug fix (Triệu chứng / Nguyên nhân gốc / Cách sửa / Quy tắc phòng ngừa).
 
 ## Template cho commit message
 
@@ -70,4 +39,4 @@ Docs updated:
 - changelog.md: [entries đã thêm]
 ```
 
-TYPE: feat | fix | refactor | docs | chore
+TYPE: `feat` | `fix` | `refactor` | `docs` | `chore`

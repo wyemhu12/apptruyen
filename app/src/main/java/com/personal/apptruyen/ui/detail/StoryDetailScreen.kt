@@ -132,13 +132,14 @@ fun StoryDetailScreen(
                 val story = state.story ?: return@Scaffold
                 val progress = state.readingProgress
                 val lastChapterNum = state.lastReadChapter
+                val effectiveTotalChapters = maxOf(story.totalChapters, state.totalChapterCount)
 
                 LazyColumn(
                     modifier = Modifier.fillMaxSize(),
                 ) {
                     // ── Hero Section ──
                     item {
-                        HeroSection(story = story)
+                        HeroSection(story = story, totalChapters = effectiveTotalChapters)
                     }
 
                     // ── Genre Chips ──
@@ -229,8 +230,8 @@ fun StoryDetailScreen(
                     }
 
                     // ── Unread Badge (B8) ──
-                    if (progress != null && story.totalChapters > 0) {
-                        val unread = story.totalChapters - progress.lastChapterNumber
+                    if (progress != null && effectiveTotalChapters > 0) {
+                        val unread = effectiveTotalChapters - progress.lastChapterNumber
                         if (unread > 0) {
                             item {
                                 SuggestionChip(
@@ -325,7 +326,10 @@ fun StoryDetailScreen(
 // ── Extracted Composables ──────────────────────────────────────────
 
 @Composable
-private fun HeroSection(story: Story) {
+private fun HeroSection(
+    story: Story,
+    totalChapters: Int = story.totalChapters,
+) {
     Box(
         modifier =
             Modifier
@@ -491,7 +495,12 @@ private fun HeroSection(story: Story) {
                     color = Color.White.copy(alpha = 0.2f),
                 ) {
                     Text(
-                        text = "${story.totalChapters} chương",
+                        text =
+                            if (totalChapters > 0) {
+                                "$totalChapters chương"
+                            } else {
+                                "Đang cập nhật chương"
+                            },
                         style = MaterialTheme.typography.labelMedium,
                         color = Color.White,
                         modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp),

@@ -1,6 +1,6 @@
 # Kiến trúc & Cấu trúc dự án
 
-> **Cập nhật lần cuối:** 2026-10-19 04:20
+> **Cập nhật lần cuối:** 2026-10-23 20:25
 
 ## Tổng quan kiến trúc
 
@@ -67,7 +67,7 @@ app/src/main/
 │   │   │   ├── ReadingStatsEntity.kt  # Thống kê đọc theo ngày
 │   │   │   ├── SearchHistoryEntity.kt # Lịch sử tìm kiếm
 │   │   │   └── DownloadStats.kt       # Data class kết quả thống kê tải
-│   │   ├── StoryDao.kt
+│   │   ├── StoryDao.kt                # Story CRUD + updateTotalChaptersIfGreater (đồng bộ đơn điệu tổng số chương)
 │   │   ├── ChapterDao.kt              # Chiếu nhẹ (NULL AS content) cho truy vấn danh sách, phân trang cho backup
 │   │   ├── ReadingProgressDao.kt
 │   │   ├── ReadingStatsDao.kt         # DAO thống kê đọc
@@ -80,7 +80,7 @@ app/src/main/
 │   │   ├── BaseScraper.kt       # Abstract base — shared HTTP, cache TTL 10m (CACHE_TTL_MS), selective retry, HTTPS cover upgrade
 │   │   ├── TangThuVienScraper.kt # Scrape tangthuvien.org (extends BaseScraper, customBaseUrl)
 │   │   ├── SsTruyenScraper.kt    # Scrape sstruyen.pics (extends BaseScraper)
-│   │   ├── WikidichScraper.kt    # Scrape wikicv.org (chữ ký fuzzySign + AJAX pagination + fetchDocumentWithRetry)
+│   │   ├── WikidichScraper.kt    # Scrape wikicv.org (fuzzySign + AJAX pagination + ajaxFragmentCache + fetchTotalChaptersFromBookIndex)
 │   │   ├── ResilientDohDns.kt    # DNS-over-HTTPS (Cloudflare 1.1.1.1/1.0.0.1 + Google 8.8.8.8 + System DNS fallback) vượt chặn DNS WiFi công ty
 │   │   ├── ScraperException.kt  # Sealed error hierarchy (7 subtypes, LoginRequiredException, 100% thông báo tiếng Việt)
 │   │   ├── ScraperCircuitBreaker.kt # Circuit breaker pattern (CLOSED/OPEN/HALF_OPEN)
@@ -93,7 +93,7 @@ app/src/main/
 │   │       └── WebViewCookieHandler.kt # Cookie sync & validation
 │   └── repository/
 │       ├── IStoryRepository.kt      # Interface — story/chapter core
-│       ├── StoryRepository.kt       # Core: search, browse, detail, chapters, refresh (atomic merge, upgradeToHttps + StoryEntity.toDomain)
+│       ├── StoryRepository.kt       # Core: search, browse, detail, chapters, refresh (atomic merge, resolveSafeTotalChapters 3-way, upgradeToHttps)
 │       ├── ISourceAuthRepository.kt # Interface — xác thực nguồn truyện
 │       ├── SourceAuthRepository.kt  # Triển khai quản lý auth session, cookie
 │       ├── IDownloadRepository.kt   # Interface — download ops

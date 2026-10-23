@@ -372,19 +372,25 @@ class StoryRepository
             val cached = findCachedStory(storyUrl)
 
             if (cached != null) {
+                val chapterCountInDb = chapterDao.getChapterCount(cached.id)
+                val effectiveCachedTotal = resolveSafeTotalChapters(0, cached.totalChapters, chapterCountInDb)
+                if (effectiveCachedTotal > cached.totalChapters) {
+                    storyDao.updateTotalChaptersIfGreater(cached.id, effectiveCachedTotal)
+                }
+
                 // Fire-and-forget background refresh — uses app-scoped coroutine
                 appScope.launch {
                     try {
                         val source = sourceFor(storyUrl)
                         val fresh = source.getStoryDetail(storyUrl)
-                        // Guard: không ghi đè nếu fresh data có totalChapters=0 (lỗi parse)
-                        // mà cached đã có totalChapters > 0
+                        val latestInDb = storyDao.getStoryById(cached.id)
+                        val dbChapterCount = chapterDao.getChapterCount(cached.id)
                         val safeTotalChapters =
-                            if (fresh.totalChapters == 0 && cached.totalChapters > 0) {
-                                cached.totalChapters
-                            } else {
-                                fresh.totalChapters
-                            }
+                            resolveSafeTotalChapters(
+                                freshTotal = fresh.totalChapters,
+                                existingTotal = maxOf(cached.totalChapters, latestInDb?.totalChapters ?: 0),
+                                dbChapterCount = dbChapterCount,
+                            )
                         val safeCoverImageUrl = resolveSafeCoverUrl(fresh.coverImageUrl, cached.coverImageUrl)
                         val entity =
                             fresh.toEntity().copy(
@@ -397,12 +403,15 @@ class StoryRepository
                                 totalChapters = safeTotalChapters,
                             )
                         storyDao.insertStory(entity)
+                        if (safeTotalChapters > 0) {
+                            storyDao.updateTotalChaptersIfGreater(cached.id, safeTotalChapters)
+                        }
                     } catch (e: Exception) {
                         if (e is CancellationException) throw e
                         Timber.tag("StoryRepo").d(e, "Background refresh failed")
                     }
                 }
-                val domainStory = cached.toDomain()
+                val domainStory = cached.toDomain().copy(totalChapters = effectiveCachedTotal)
                 return if (
                     domainStory.coverImageUrl.contains("data:", ignoreCase = true) ||
                     domainStory.coverImageUrl.contains("base64", ignoreCase = true)
@@ -422,12 +431,19 @@ class StoryRepository
                         it.id.isNotBlank() && it.sourceId == story.sourceId
                     }
             val resolvedId = existingEntity?.id ?: story.id
-            val resolvedStory = story.copy(id = resolvedId)
+            val dbChapterCount = chapterDao.getChapterCount(resolvedId)
+            val safeTotal =
+                resolveSafeTotalChapters(
+                    freshTotal = story.totalChapters,
+                    existingTotal = existingEntity?.totalChapters ?: 0,
+                    dbChapterCount = dbChapterCount,
+                )
+            val resolvedStory = story.copy(id = resolvedId, totalChapters = safeTotal)
             val entity =
                 resolvedStory.toEntity().let { e ->
                     if (existingEntity != null) {
                         e.copy(
-                            totalChapters = resolveSafeTotalChapters(resolvedStory.totalChapters, existingEntity.totalChapters),
+                            totalChapters = safeTotal,
                             coverImageUrl = resolveSafeCoverUrl(resolvedStory.coverImageUrl, existingEntity.coverImageUrl),
                             isInLibrary = existingEntity.isInLibrary,
                             addedTimestamp = existingEntity.addedTimestamp,
@@ -436,12 +452,15 @@ class StoryRepository
                         )
                     } else {
                         e.copy(
-                            totalChapters = resolveSafeTotalChapters(resolvedStory.totalChapters, 0),
+                            totalChapters = safeTotal,
                             coverImageUrl = resolveSafeCoverUrl(resolvedStory.coverImageUrl, null),
                         )
                     }
                 }
             storyDao.insertStory(entity)
+            if (safeTotal > 0) {
+                storyDao.updateTotalChaptersIfGreater(resolvedId, safeTotal)
+            }
             return resolvedStory
         }
 
@@ -533,6 +552,14 @@ class StoryRepository
                     if (titleToUpdate != existing.title || urlToUpdate != existing.url) {
                         chapterDao.updateChapterMetadata(storyId, ch.chapterNumber, titleToUpdate, urlToUpdate)
                     }
+                }
+
+                val highestChapterNumber = chapters.maxOfOrNull { it.chapterNumber } ?: 0
+                val mergedCount = existingMap.size + newChapters.size
+                val dbCountAfterMerge = chapterDao.getChapterCount(storyId)
+                val actualTotalChapters = maxOf(dbCountAfterMerge, mergedCount, highestChapterNumber)
+                if (actualTotalChapters > 0) {
+                    storyDao.updateTotalChaptersIfGreater(storyId, actualTotalChapters)
                 }
 
                 chapters.map { if (it.storyId == storyId) it else it.copy(storyId = storyId) }
@@ -748,10 +775,18 @@ class StoryRepository
                                 try {
                                     val source = sourceFor(story.url)
                                     val fresh = source.getStoryDetail(story.url)
+                                    val latestInDb = storyDao.getStoryById(story.id)
+                                    val dbChapterCount = chapterDao.getChapterCount(story.id)
+                                    val safeTotalChapters =
+                                        resolveSafeTotalChapters(
+                                            freshTotal = fresh.totalChapters,
+                                            existingTotal = maxOf(story.totalChapters, latestInDb?.totalChapters ?: 0),
+                                            dbChapterCount = dbChapterCount,
+                                        )
                                     val entity =
                                         fresh.toEntity().copy(
                                             id = story.id,
-                                            totalChapters = resolveSafeTotalChapters(fresh.totalChapters, story.totalChapters),
+                                            totalChapters = safeTotalChapters,
                                             coverImageUrl = resolveSafeCoverUrl(fresh.coverImageUrl, story.coverImageUrl),
                                             isInLibrary = story.isInLibrary,
                                             addedTimestamp = story.addedTimestamp,
@@ -759,6 +794,9 @@ class StoryRepository
                                             storyCustomReplacements = story.storyCustomReplacements,
                                         )
                                     storyDao.insertStory(entity)
+                                    if (safeTotalChapters > 0) {
+                                        storyDao.updateTotalChaptersIfGreater(story.id, safeTotalChapters)
+                                    }
                                 } catch (e: Exception) {
                                     if (e is CancellationException) throw e
                                     // Offline — skip
@@ -831,9 +869,5 @@ internal fun resolveSafeCoverUrl(
 internal fun resolveSafeTotalChapters(
     freshTotal: Int,
     existingTotal: Int,
-): Int =
-    when {
-        freshTotal > 0 -> freshTotal
-        existingTotal > 0 -> existingTotal
-        else -> 0
-    }
+    dbChapterCount: Int = 0,
+): Int = maxOf(freshTotal, existingTotal, dbChapterCount, 0)

@@ -6,6 +6,28 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 
 ## [Unreleased]
 
+### Nâng cấp Quản trị AI Agent (`.agents/`)
+
+- **Nâng cấp Hệ thống Rules, Subagents, Skills & Code Freeze Guard theo Vikini Governance 2.0 (2026-10-23)**:
+  - **Chuẩn hóa Subagents (`.agents/agents/{planner,reviewer,qa}/agent.md`)**: Đổi `model:` trong YAML frontmatter sang `model: pro` chuẩn schema Antigravity, xóa trường `role:` dư thừa, cập nhật Model Roster tháng 10/2026 (`gemini-4-argon`, `claude-opus-5-5`, `claude-sonnet-5-5`, `gemini-3.8-flash`), khử bước tự đọc lại `agent.md` ở Bước 0, bổ sung 8 nguyên lý kỹ thuật `pstack` và mở rộng chuẩn Kế hoạch 10 mục + Plan Completeness Gate 7 hạng mục (`Out of Scope`, `Skills Loaded & Applied`, `Caller-First Design Sketch`).
+  - **Progressive Disclosure & Context Engineering (`.agents/rules/`)**: Chuyển `01-coding.md` (`*.kt, *.kts`) và `03-ui.md` (`*Screen.kt, **/ui/**/*.kt, **/res/**/*.xml`) sang `trigger: glob`; giữ tổng dung lượng 4 file `always_on` (`00-core.md`, `02-quality.md`, `05-plan-review.md`, `06-docs.md`) `< 18.000` ký tự; bổ sung `Core Coding & Testing Invariants` và `Token Efficiency (tokenleak discipline)` vào `00-core.md` cùng `Skill Precedence Hierarchy` vào `02-quality.md`.
+  - **Bộ 4 Skills Nội Bộ Chuẩn Hóa (`.agents/skills/apptruyen-*/SKILL.md`)**: Tạo mới `apptruyen-debug` (hợp nhất `/debug` 6 bước + `/post-fix` 5 bước), `apptruyen-audit` (`/audit` 8 bước), `apptruyen-investigate` (`/how`, `/why`, `/recall`, `/blast-radius`), và `apptruyen-simplify` (`/simplify` 4 thao tác bảo toàn hành vi), thay thế thư mục `.agents/workflows/` cũ (theo quyết định D3 Phương án B).
+  - **Gia cố `code-freeze-guard.js`, `plan-approval.js`, `hooks.json` & Đồng bộ Host Nguồn Truyện**: Bổ sung Layer 2 `.md`-only guard cho `docs/**`, Read Guard chặn đọc file secret/ngoài repo, hỗ trợ bí danh công cụ (`write_file`, `Write`, `edit_file`, `Edit`, `MultiEdit`, chặn `Append: true` trên file plan) + `formatHookOutput`, đồng bộ 4 host nguồn truyện đang hoạt động (`sstruyen.pics`, `api.sstruyen.pics`, `file.sstruyen.pics`, `wikicv.org`) và mở rộng bộ kiểm thử tự động lên 59 unit tests Node.js (`P6`, `P7`, `L6b`, `H1c`, `H11`, `A30`).
+
+### Fix bug
+
+- **Khắc phục triệt để lỗi nhảy xuống cuối chương khi vuốt sang chương tiếp theo & lỗi hiển thị thiếu tổng số chương Wikidich (2026-10-23)**:
+  - **Chống nhảy cuối chương khi vuốt chuyển chương (`ReaderScreen.kt`, `ReaderViewModel.kt`)**:
+    - Đổi `DisposableEffect(lifecycleOwner, listState)` sang `DisposableEffect(lifecycleOwner)` kết hợp `val currentListState by rememberUpdatedState(listState)` để `onDispose` không bị kích hoạt khi chuyển chương (tránh ghi đè `firstVisibleItemIndex` ở cuối chương cũ vào chương mới và tránh gọi `OnReaderPaused` làm mất thống kê thời gian đọc).
+    - Gắn `chapterNumber: Int = -1` vào `ReaderIntent.SaveScrollPosition`, bổ sung guard kiểm tra khớp `currentChapterNumber` và trạng thái `!isLoading && !isLoadingNextChapter && !isLoadingPrevChapter && error == null && paragraphs.isNotEmpty()` trong `ReaderViewModel.saveScrollPosition`.
+    - Thêm `restoreSavedScroll: Boolean = false` vào `ReaderViewModel.loadChapter` (chỉ bật `true` khi mở chương lần đầu ở `init` hoặc `retryLoadChapter` khi `currentScrollPosition == 0`), đồng thời phân biệt `isSameChapter` để bảo toàn vị trí cuộn khi `reprocessCurrentChapter`.
+  - **Hiển thị đầy đủ tổng số chương Wikidich khi tìm kiếm, xem chi tiết truyện và danh sách đang đọc (`WikidichScraper.kt`, `StoryDao.kt`, `StoryRepository.kt`, `StoryDetailScreen.kt`, `HomeScreen.kt`)**:
+    - Mở rộng `LATEST_CHAPTER_TEXT_REGEX` và `LATEST_CHAPTER_HREF_REGEX` trong phạm vi `.cover-info`, bổ sung fallback `fetchTotalChaptersFromBookIndex` nhảy theo `data-start` của `/book/index` kèm `ajaxFragmentCache` (TTL 10 phút, tối đa 30 mục) cho các truyện đã hoàn thành hoặc có chương cuối là phiên ngoại.
+    - Sửa cách tính `totalPages` trong `WikidichScraper.getFirstPageChapters` từ `maxStart` (`data-start`) để không bị cắt ở trang 5 với truyện dài hàng nghìn chương; bật `enrichWithChapterCounts` (`ENRICH_MAX_ITEMS = 5`, `ENRICH_BATCH_SIZE = 2`, tôn trọng `crawlDelayMs` và dừng sớm khi gặp HTTP `403`/`429`/`503`) trong `WikidichScraper.search()`.
+    - Bổ sung `StoryDao.updateTotalChaptersIfGreater` và đồng bộ `resolveSafeTotalChapters(freshTotal, existingTotal, dbChapterCount)` tại cả 4 luồng ghi của `StoryRepository` (`getStoryDetail` có/không cache, `mergeAndInsertChapters`, `refreshLibraryStories`).
+    - Dùng `effectiveTotalChapters = maxOf(story.totalChapters, state.totalChapterCount)` trên `StoryDetailScreen` và ẩn mẫu số `/0` trên `HomeScreen` khi `totalChapters <= 0`.
+    - Bổ sung 16 unit tests mới trong `ReaderViewModelTest`, `WikidichScraperTest` và `StoryRepositoryTest`.
+
 ## [3.0.4] - 2026-10-19 (versionCode 52)
 
 ### Fix bug

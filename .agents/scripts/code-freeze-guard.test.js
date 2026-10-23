@@ -12,6 +12,7 @@ import {
     assessTestIntegrity,
     decide,
     extractInput,
+    formatHookOutput,
     isPlanContentApproved,
     isTestFile,
     sensitiveCategory,
@@ -502,12 +503,18 @@ describe('hook contract and governance verification (H1 - H10)', () => {
 
         // PreToolUse
         const pre = cfg.PreToolUse[0];
-        assert.equal(pre.matcher, 'write_to_file|replace_file_content|multi_replace_file_content|run_command');
+        assert.equal(
+            pre.matcher,
+            'write_to_file|write_file|replace_file_content|edit_file|multi_replace_file_content|run_command'
+        );
         assert.equal(pre.hooks[0].command, 'node scripts/code-freeze-guard.js --event pre');
 
         // PostToolUse
         const post = cfg.PostToolUse[0];
-        assert.equal(post.matcher, 'write_to_file|replace_file_content|multi_replace_file_content');
+        assert.equal(
+            post.matcher,
+            'write_to_file|write_file|replace_file_content|edit_file|multi_replace_file_content'
+        );
         assert.equal(post.hooks[0].command, 'node scripts/code-freeze-guard.js --event post');
     });
 
@@ -658,6 +665,112 @@ describe('hook contract and governance verification (H1 - H10)', () => {
                     fs.writeFileSync(lockPath, JSON.stringify(data), 'utf8');
                 } catch {}
             }
+        }
+    });
+
+    test('P6: Layer 2 .md-only guard blocks non-.md files inside docs/', () => {
+        assert.equal(decide({ toolName: 'write_file', targetFile: repo('docs/architecture.md') }, frozen).decision, 'allow');
+        assert.equal(decide({ toolName: 'write_file', targetFile: repo('docs/plans/README.md') }, frozen).decision, 'allow');
+
+        for (const badDoc of ['docs/exploit.js', 'docs/plans/run.ps1', 'docs/notes/a.mjs', 'docs/run.bat']) {
+            const res = decide({ toolName: 'write_file', targetFile: repo(badDoc) }, frozen);
+            assert.equal(res.decision, 'ask', `Non-.md file inside docs must ask: ${badDoc}`);
+            assert.match(res.reason, /only \.md files are allowed inside unfrozen documentation paths/);
+        }
+    });
+
+    test('P7: Read Guard blocks reading secret/outside paths and allows normal repo files', () => {
+        for (const secret of ['local.properties', 'keystore.properties', 'release.jks', '.env.local', '.git/config']) {
+            const res = decide({ toolName: 'read_file', targetFile: repo(secret) }, approved);
+            assert.equal(res.decision, 'ask', `Read of secret must ask: ${secret}`);
+            assert.match(res.reason, /Security Guard/);
+        }
+
+        const outside = decide({ toolName: 'Read', targetFile: 'C:/Windows/win.ini' }, approved);
+        assert.equal(outside.decision, 'ask');
+
+        assert.equal(decide({ toolName: 'read_file', targetFile: repo('docs/architecture.md') }, frozen).decision, 'allow');
+        assert.equal(decide({ toolName: 'view_file', targetFile: repo('app/build.gradle.kts') }, frozen).decision, 'allow');
+    });
+
+    test('L6b: allows curl.exe -q -s to active story source hosts (sstruyen.pics & wikicv.org)', () => {
+        for (const url of [
+            'https://sstruyen.pics/truyen/abc',
+            'https://api.sstruyen.pics/genres',
+            'https://file.sstruyen.pics/files/covers/a.webp',
+            'https://wikicv.org/truyen/de-ba'
+        ]) {
+            assert.equal(decide({ command: `curl.exe -q -s ${url}` }, frozen).decision, 'allow');
+        }
+    });
+
+    test('H1c: extractInput supports tool aliases and formatHookOutput formats Claude PreToolUse', () => {
+        const w = extractInput({
+            toolCall: { name: 'write_file', args: { Path: 'docs/architecture.md', Content: '# Arch' } }
+        });
+        assert.equal(w.toolName, 'write_file');
+        assert.equal(w.targetFile, 'docs/architecture.md');
+        assert.equal(w.newContent, '# Arch');
+
+        const e = extractInput({
+            toolCall: { name: 'edit_file', args: { Path: 'app/src/test/SampleTest.kt', Target: 'assertEquals(1, 1)', Replacement: '// removed' } }
+        });
+        assert.equal(e.toolName, 'edit_file');
+        assert.equal(e.oldContent, 'assertEquals(1, 1)');
+        assert.equal(e.newContent, '// removed');
+
+        const claudeAllow = formatHookOutput({ decision: 'allow' }, { hook_event_name: 'PreToolUse', permission_mode: 'dontAsk' });
+        assert.equal(claudeAllow, null);
+
+        const claudeDeny = formatHookOutput(
+            { decision: 'ask', reason: 'Blocked secret' },
+            { hook_event_name: 'PreToolUse', permission_mode: 'dontAsk' }
+        );
+        assert.deepEqual(claudeDeny, {
+            hookSpecificOutput: {
+                hookEventName: 'PreToolUse',
+                permissionDecision: 'deny',
+                permissionDecisionReason: 'Blocked secret'
+            }
+        });
+    });
+
+    test('H11: Governance character limits, Progressive Disclosure triggers, subagent schema & internal skills', () => {
+        const rulesDir = path.join(REPO_ROOT, '.agents', 'rules');
+        const ruleFiles = fs.readdirSync(rulesDir).filter((f) => f.endsWith('.md'));
+        let alwaysOnTotal = 0;
+
+        for (const file of ruleFiles) {
+            const content = fs.readFileSync(path.join(rulesDir, file), 'utf8');
+            assert.ok(content.length <= 12000, `Rule ${file} exceeds 12,000 chars (${content.length})`);
+            if (/^trigger:\s*always_on\b/m.test(content)) {
+                alwaysOnTotal += content.length;
+            }
+        }
+        assert.ok(alwaysOnTotal < 18000, `Total always_on rules exceed 18,000 chars (${alwaysOnTotal})`);
+
+        const codingRule = fs.readFileSync(path.join(rulesDir, '01-coding.md'), 'utf8');
+        const uiRule = fs.readFileSync(path.join(rulesDir, '03-ui.md'), 'utf8');
+        assert.match(codingRule, /^trigger:\s*glob\b/m);
+        assert.match(uiRule, /^trigger:\s*glob\b/m);
+        assert.ok(!codingRule.includes('Gemini 3.1 Pro'));
+
+        for (const agentName of ['planner', 'reviewer', 'qa']) {
+            const agentPath = path.join(REPO_ROOT, '.agents', 'agents', agentName, 'agent.md');
+            const content = fs.readFileSync(agentPath, 'utf8');
+            assert.ok(content.length <= 10000, `Agent ${agentName} exceeds 10,000 chars (${content.length})`);
+            const fmMatch = /^---\r?\n([\s\S]*?)\r?\n---/.exec(content);
+            assert.ok(fmMatch, `Agent ${agentName} missing YAML frontmatter`);
+            assert.match(fmMatch[1], /^model:\s*pro\b/m);
+            assert.ok(!/^role:/m.test(fmMatch[1]), `Agent ${agentName} frontmatter must not contain role:`);
+            assert.ok(!content.includes('claude-4.6-opus'), `Agent ${agentName} must not reference deprecated claude-4.6-opus`);
+        }
+
+        for (const skillName of ['apptruyen-debug', 'apptruyen-audit', 'apptruyen-investigate', 'apptruyen-simplify']) {
+            const skillPath = path.join(REPO_ROOT, '.agents', 'skills', skillName, 'SKILL.md');
+            assert.ok(fs.existsSync(skillPath), `Missing internal skill: ${skillName}`);
+            const skillContent = fs.readFileSync(skillPath, 'utf8');
+            assert.match(skillContent, new RegExp(`^name:\\s*${skillName}\\b`, 'm'));
         }
     });
 });
