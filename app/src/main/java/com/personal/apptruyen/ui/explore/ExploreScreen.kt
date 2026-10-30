@@ -9,6 +9,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AccountCircle
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Explore
 import androidx.compose.material.icons.filled.Refresh
@@ -22,6 +23,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.personal.apptruyen.data.local.SourceIds
 import com.personal.apptruyen.ui.components.AnimatedEmptyState
 import com.personal.apptruyen.ui.components.ShimmerStoryGrid
 import com.personal.apptruyen.ui.components.StoryCardGrid
@@ -108,186 +110,277 @@ fun ExploreScreen(
                     .fillMaxSize()
                     .padding(padding),
         ) {
-            when {
-                state.isLoading -> {
-                    ShimmerStoryGrid(
-                        count = 6,
-                        modifier = Modifier.padding(top = 8.dp),
-                    )
-                }
-                state.error != null && state.stories.isEmpty() -> {
-                    AnimatedEmptyState(
-                        icon = Icons.Default.Explore,
-                        message = state.error ?: "Đã xảy ra lỗi",
-                        actionText = "Thử lại",
-                        onActionClick = { viewModel.refresh() },
-                    )
-                }
-                else -> {
-                    Column {
-                        // Genre chips row
-                        if (state.genres.isNotEmpty()) {
-                            LazyRow(
-                                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp),
-                                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                            ) {
-                                item {
-                                    FilterChip(
-                                        selected = state.selectedGenre == null,
-                                        onClick = { viewModel.selectGenre(null) },
-                                        label = { Text("Tất cả") },
-                                        shape = RoundedCornerShape(20.dp),
-                                    )
-                                }
-                                items(state.genres, key = { it.slug }) { genre ->
-                                    FilterChip(
-                                        selected = state.selectedGenre == genre,
-                                        onClick = { viewModel.selectGenre(genre) },
-                                        label = { Text(genre.name) },
-                                        shape = RoundedCornerShape(20.dp),
-                                    )
-                                }
-                            }
-                        }
-
-                        // Wikidich login required banner
-                        AnimatedVisibility(
-                            visible = loginRequiredSources.contains("wikidich"),
-                            enter = fadeIn() + expandVertically(),
-                            exit = fadeOut() + shrinkVertically(),
-                        ) {
-                            Card(
-                                modifier =
-                                    Modifier
-                                        .fillMaxWidth()
-                                        .padding(horizontal = 16.dp, vertical = 6.dp),
-                                colors =
-                                    CardDefaults.cardColors(
-                                        containerColor = MaterialTheme.colorScheme.tertiaryContainer,
-                                        contentColor = MaterialTheme.colorScheme.onTertiaryContainer,
-                                    ),
-                                shape = RoundedCornerShape(12.dp),
-                            ) {
-                                Row(
-                                    modifier = Modifier.padding(12.dp),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(10.dp),
-                                ) {
-                                    Icon(
-                                        Icons.Default.AccountCircle,
-                                        contentDescription = null,
-                                        modifier = Modifier.size(24.dp),
-                                        tint = MaterialTheme.colorScheme.tertiary,
-                                    )
-                                    Column(modifier = Modifier.weight(1f)) {
-                                        Text(
-                                            "Wikidich yêu cầu đăng nhập",
-                                            style = MaterialTheme.typography.titleSmall,
-                                            fontWeight = FontWeight.Bold,
-                                        )
-                                        Text(
-                                            "Đăng nhập tài khoản Wikidich để đọc và duyệt danh sách đầy đủ.",
-                                            style = MaterialTheme.typography.bodySmall,
-                                        )
-                                    }
-                                    Button(
-                                        onClick = { onNavigateToSourceLogin("wikidich") },
-                                        colors =
-                                            ButtonDefaults.buttonColors(
-                                                containerColor = MaterialTheme.colorScheme.tertiary,
-                                                contentColor = MaterialTheme.colorScheme.onTertiary,
-                                            ),
-                                        shape = RoundedCornerShape(8.dp),
-                                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
-                                    ) {
-                                        Text("Đăng nhập", style = MaterialTheme.typography.labelMedium)
-                                    }
-                                    IconButton(
-                                        onClick = { viewModel.dismissLoginPrompt("wikidich") },
-                                        modifier = Modifier.size(28.dp),
-                                    ) {
+            Column(modifier = Modifier.fillMaxSize()) {
+                // Active source selector row
+                LazyRow(
+                    modifier =
+                        Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 4.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    items(SourceIds.ORDERED_SOURCES, key = { it }) { sourceId ->
+                        val label = SourceIds.SOURCE_LABELS[sourceId] ?: sourceId
+                        val selected = state.activeSource == sourceId
+                        FilterChip(
+                            selected = selected,
+                            onClick = { viewModel.selectSource(sourceId) },
+                            label = { Text(label) },
+                            leadingIcon =
+                                if (selected) {
+                                    {
                                         Icon(
-                                            Icons.Default.Clear,
-                                            contentDescription = "Đóng",
+                                            Icons.Default.Check,
+                                            contentDescription = null,
                                             modifier = Modifier.size(16.dp),
                                         )
                                     }
-                                }
-                            }
-                        }
-
-                        if (state.stories.isEmpty()) {
-                            val isWikidichLoginNeeded = loginRequiredSources.contains("wikidich")
-                            AnimatedEmptyState(
-                                icon = Icons.Default.Explore,
-                                message =
-                                    if (isWikidichLoginNeeded) {
-                                        "Vui lòng đăng nhập tài khoản Wikidich để duyệt và tìm kiếm danh sách truyện"
-                                    } else {
-                                        "Không tìm thấy truyện nào"
-                                    },
-                                actionText = if (isWikidichLoginNeeded) "Đăng nhập Wikidich" else "Thử lại",
-                                onActionClick = {
-                                    if (isWikidichLoginNeeded) {
-                                        onNavigateToSourceLogin("wikidich")
-                                    } else {
-                                        viewModel.refresh()
-                                    }
+                                } else {
+                                    null
                                 },
-                            )
-                        } else {
-                            LazyVerticalGrid(
-                                state = gridState,
-                                columns = GridCells.Adaptive(minSize = 150.dp),
-                                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
-                                horizontalArrangement = Arrangement.spacedBy(12.dp),
-                                verticalArrangement = Arrangement.spacedBy(12.dp),
-                                modifier = Modifier.weight(1f),
-                            ) {
-                                itemsIndexed(
-                                    items = state.stories,
-                                    key = { _, story -> "${story.sourceId}:${story.id}" },
-                                ) { index, story ->
-                                    var visible by remember { mutableStateOf(false) }
-                                    LaunchedEffect(Unit) { visible = true }
+                            shape = RoundedCornerShape(20.dp),
+                            colors =
+                                FilterChipDefaults.filterChipColors(
+                                    selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
+                                    selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                                ),
+                        )
+                    }
+                }
 
-                                    AnimatedVisibility(
-                                        visible = visible,
-                                        enter =
-                                            fadeIn(tween(300, delayMillis = (index % 6) * 60)) +
-                                                scaleIn(
-                                                    initialScale = 0.85f,
-                                                    animationSpec = tween(350, delayMillis = (index % 6) * 60),
-                                                ),
-                                    ) {
-                                        StoryCardGrid(
-                                            story = story,
-                                            onClick = { onStoryClick(story.id, story.url) },
+                // Independent "Truyện nam" filter chip (Wikidich only) + Genre chips row
+                Row(
+                    modifier =
+                        Modifier
+                            .fillMaxWidth()
+                            .padding(start = 16.dp, top = 4.dp, bottom = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    if (state.activeSource == SourceIds.WIKIDICH) {
+                        FilterChip(
+                            selected = state.maleOnly,
+                            onClick = { viewModel.toggleMaleOnly() },
+                            label = { Text("Truyện nam") },
+                            leadingIcon =
+                                if (state.maleOnly) {
+                                    {
+                                        Icon(
+                                            Icons.Default.Check,
+                                            contentDescription = null,
+                                            modifier = Modifier.size(16.dp),
                                         )
                                     }
-                                }
+                                } else {
+                                    null
+                                },
+                            shape = RoundedCornerShape(20.dp),
+                            colors =
+                                FilterChipDefaults.filterChipColors(
+                                    selectedContainerColor = MaterialTheme.colorScheme.secondaryContainer,
+                                    selectedLabelColor = MaterialTheme.colorScheme.onSecondaryContainer,
+                                ),
+                        )
+                    }
 
-                                // Loading more indicator
-                                if (state.isLoadingMore) {
-                                    item(span = { GridItemSpan(maxLineSpan) }) {
-                                        Box(
-                                            modifier =
-                                                Modifier
-                                                    .fillMaxWidth()
-                                                    .padding(24.dp),
-                                            contentAlignment = Alignment.Center,
+                    if (state.genres.isNotEmpty()) {
+                        if (state.activeSource == SourceIds.WIKIDICH) {
+                            VerticalDivider(
+                                modifier =
+                                    Modifier
+                                        .height(24.dp)
+                                        .padding(horizontal = 8.dp),
+                                color = MaterialTheme.colorScheme.outlineVariant,
+                            )
+                        }
+                        LazyRow(
+                            modifier = Modifier.weight(1f),
+                            contentPadding = PaddingValues(end = 16.dp),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            item {
+                                FilterChip(
+                                    selected = state.selectedGenre == null,
+                                    onClick = { viewModel.selectGenre(null) },
+                                    label = { Text("Tất cả") },
+                                    shape = RoundedCornerShape(20.dp),
+                                )
+                            }
+                            items(state.genres, key = { it.slug }) { genre ->
+                                FilterChip(
+                                    selected = state.selectedGenre == genre,
+                                    onClick = { viewModel.selectGenre(genre) },
+                                    label = { Text(genre.name) },
+                                    shape = RoundedCornerShape(20.dp),
+                                )
+                            }
+                        }
+                    }
+                }
+
+                Box(
+                    modifier =
+                        Modifier
+                            .weight(1f)
+                            .fillMaxWidth(),
+                ) {
+                    when {
+                        state.isLoading -> {
+                            ShimmerStoryGrid(
+                                count = 6,
+                                modifier = Modifier.padding(top = 8.dp),
+                            )
+                        }
+                        state.error != null && state.stories.isEmpty() -> {
+                            AnimatedEmptyState(
+                                icon = Icons.Default.Explore,
+                                message = state.error ?: "Đã xảy ra lỗi",
+                                actionText = "Thử lại",
+                                onActionClick = { viewModel.refresh() },
+                            )
+                        }
+                        else -> {
+                            Column(modifier = Modifier.fillMaxSize()) {
+                                // Wikidich login required banner
+                                AnimatedVisibility(
+                                    visible = loginRequiredSources.contains("wikidich"),
+                                    enter = fadeIn() + expandVertically(),
+                                    exit = fadeOut() + shrinkVertically(),
+                                ) {
+                                    Card(
+                                        modifier =
+                                            Modifier
+                                                .fillMaxWidth()
+                                                .padding(horizontal = 16.dp, vertical = 6.dp),
+                                        colors =
+                                            CardDefaults.cardColors(
+                                                containerColor = MaterialTheme.colorScheme.tertiaryContainer,
+                                                contentColor = MaterialTheme.colorScheme.onTertiaryContainer,
+                                            ),
+                                        shape = RoundedCornerShape(12.dp),
+                                    ) {
+                                        Row(
+                                            modifier = Modifier.padding(12.dp),
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(10.dp),
                                         ) {
-                                            CircularProgressIndicator(
-                                                modifier = Modifier.size(28.dp),
-                                                strokeWidth = 3.dp,
+                                            Icon(
+                                                Icons.Default.AccountCircle,
+                                                contentDescription = null,
+                                                modifier = Modifier.size(24.dp),
+                                                tint = MaterialTheme.colorScheme.tertiary,
                                             )
+                                            Column(modifier = Modifier.weight(1f)) {
+                                                Text(
+                                                    "Wikidich yêu cầu đăng nhập",
+                                                    style = MaterialTheme.typography.titleSmall,
+                                                    fontWeight = FontWeight.Bold,
+                                                )
+                                                Text(
+                                                    "Đăng nhập tài khoản Wikidich để đọc và duyệt danh sách đầy đủ.",
+                                                    style = MaterialTheme.typography.bodySmall,
+                                                )
+                                            }
+                                            Button(
+                                                onClick = { onNavigateToSourceLogin("wikidich") },
+                                                colors =
+                                                    ButtonDefaults.buttonColors(
+                                                        containerColor = MaterialTheme.colorScheme.tertiary,
+                                                        contentColor = MaterialTheme.colorScheme.onTertiary,
+                                                    ),
+                                                shape = RoundedCornerShape(8.dp),
+                                                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+                                            ) {
+                                                Text("Đăng nhập", style = MaterialTheme.typography.labelMedium)
+                                            }
+                                            IconButton(
+                                                onClick = { viewModel.dismissLoginPrompt("wikidich") },
+                                                modifier = Modifier.size(28.dp),
+                                            ) {
+                                                Icon(
+                                                    Icons.Default.Clear,
+                                                    contentDescription = "Đóng",
+                                                    modifier = Modifier.size(16.dp),
+                                                )
+                                            }
                                         }
                                     }
                                 }
-                            }
+
+                                if (state.stories.isEmpty()) {
+                                    val isWikidichLoginNeeded = loginRequiredSources.contains("wikidich")
+                                    AnimatedEmptyState(
+                                        icon = Icons.Default.Explore,
+                                        message =
+                                            if (isWikidichLoginNeeded) {
+                                                "Vui lòng đăng nhập tài khoản Wikidich để duyệt và tìm kiếm danh sách truyện"
+                                            } else {
+                                                "Không tìm thấy truyện nào"
+                                            },
+                                        actionText = if (isWikidichLoginNeeded) "Đăng nhập Wikidich" else "Thử lại",
+                                        onActionClick = {
+                                            if (isWikidichLoginNeeded) {
+                                                onNavigateToSourceLogin("wikidich")
+                                            } else {
+                                                viewModel.refresh()
+                                            }
+                                        },
+                                    )
+                                } else {
+                                    LazyVerticalGrid(
+                                        state = gridState,
+                                        columns = GridCells.Adaptive(minSize = 150.dp),
+                                        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+                                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                                        verticalArrangement = Arrangement.spacedBy(12.dp),
+                                        modifier = Modifier.weight(1f),
+                                    ) {
+                                        itemsIndexed(
+                                            items = state.stories,
+                                            key = { _, story -> "${story.sourceId}:${story.id}" },
+                                        ) { index, story ->
+                                            var visible by remember { mutableStateOf(false) }
+                                            LaunchedEffect(Unit) { visible = true }
+
+                                            AnimatedVisibility(
+                                                visible = visible,
+                                                enter =
+                                                    fadeIn(tween(300, delayMillis = (index % 6) * 60)) +
+                                                        scaleIn(
+                                                            initialScale = 0.85f,
+                                                            animationSpec = tween(350, delayMillis = (index % 6) * 60),
+                                                        ),
+                                            ) {
+                                                StoryCardGrid(
+                                                    story = story,
+                                                    onClick = { onStoryClick(story.id, story.url) },
+                                                )
+                                            }
+                                        }
+
+                                        // Loading more indicator
+                                        if (state.isLoadingMore) {
+                                            item(span = { GridItemSpan(maxLineSpan) }) {
+                                                Box(
+                                                    modifier =
+                                                        Modifier
+                                                            .fillMaxWidth()
+                                                            .padding(24.dp),
+                                                    contentAlignment = Alignment.Center,
+                                                ) {
+                                                    CircularProgressIndicator(
+                                                        modifier = Modifier.size(28.dp),
+                                                        strokeWidth = 3.dp,
+                                                    )
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            } // end inner Column
                         }
-                    } // end Column
-                }
+                    } // end Box
+                } // end outer Column
             }
         }
     }

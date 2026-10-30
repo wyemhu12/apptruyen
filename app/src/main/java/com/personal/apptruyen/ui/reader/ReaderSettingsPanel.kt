@@ -14,7 +14,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.personal.apptruyen.ui.components.TextReplacementSummarySection
 import com.personal.apptruyen.ui.theme.*
+import com.personal.apptruyen.util.TextReplacementItem
+import kotlinx.collections.immutable.ImmutableList
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -29,7 +32,7 @@ internal fun ReaderSettingsPanel(
     fontFamily: ReaderViewModel.ReaderFontFamily,
     // Per-story text replacement
     storyReplacementsEnabled: Boolean,
-    storyReplacements: List<Pair<String, String>>,
+    storyReplacements: ImmutableList<TextReplacementItem>,
     // Auto-scroll
     autoScrollEnabled: Boolean,
     autoScrollSpeed: Int,
@@ -44,9 +47,10 @@ internal fun ReaderSettingsPanel(
     onBrightnessChange: (Float) -> Unit,
     onFontFamilyChange: (ReaderViewModel.ReaderFontFamily) -> Unit,
     onToggleStoryReplacements: () -> Unit,
-    onAddStoryReplacement: (String, String) -> Unit,
-    onRemoveStoryReplacement: (Int) -> Unit,
-    onSendToGlobal: (String, String) -> Unit,
+    onAddStoryReplacement: (String, String, Boolean) -> Unit,
+    onUpdateStoryReplacement: (Int, TextReplacementItem, String, String, Boolean) -> Unit,
+    onRemoveStoryReplacement: (Int, TextReplacementItem) -> Unit,
+    onSendToGlobal: (String, String, Boolean) -> Unit,
     onToggleAutoScroll: () -> Unit,
     onSetAutoScrollSpeed: (Int) -> Unit,
     onDismiss: () -> Unit,
@@ -493,117 +497,15 @@ internal fun ReaderSettingsPanel(
                 )
             }
 
-            // Per-story replacements list
-            if (storyReplacements.isNotEmpty()) {
-                storyReplacements.forEachIndexed { index, (from, to) ->
-                    Row(
-                        modifier =
-                            Modifier
-                                .fillMaxWidth()
-                                .padding(vertical = 2.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Text(
-                            "\"$from\" \u2192 \"$to\"",
-                            style = MaterialTheme.typography.bodySmall,
-                            modifier = Modifier.weight(1f),
-                        )
-                        // Gửi sang cài đặt tổng
-                        IconButton(
-                            onClick = { onSendToGlobal(from, to) },
-                            modifier = Modifier.size(32.dp),
-                        ) {
-                            Icon(
-                                Icons.Default.Language,
-                                contentDescription = "Gửi sang cài đặt tổng",
-                                modifier = Modifier.size(16.dp),
-                                tint = MaterialTheme.colorScheme.primary,
-                            )
-                        }
-                        // Xóa
-                        IconButton(
-                            onClick = { onRemoveStoryReplacement(index) },
-                            modifier = Modifier.size(32.dp),
-                        ) {
-                            Icon(
-                                Icons.Default.Delete,
-                                contentDescription = "Xóa",
-                                modifier = Modifier.size(16.dp),
-                                tint = MaterialTheme.colorScheme.error,
-                            )
-                        }
-                    }
-                }
-            } else {
-                Text(
-                    "Chưa có từ tùy chỉnh nào",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-
-            // Add button
-            var showAddDialog by remember { mutableStateOf(false) }
-            OutlinedButton(
-                onClick = { showAddDialog = true },
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(12.dp),
-            ) {
-                Icon(
-                    Icons.Default.Add,
-                    contentDescription = null,
-                    modifier = Modifier.size(18.dp),
-                )
-                Spacer(modifier = Modifier.width(8.dp))
-                Text("Thêm từ thay thế")
-            }
-
-            if (showAddDialog) {
-                var fromText by remember { mutableStateOf("") }
-                var toText by remember { mutableStateOf("") }
-                AlertDialog(
-                    onDismissRequest = { showAddDialog = false },
-                    title = { Text("Thêm từ thay thế") },
-                    text = {
-                        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                            OutlinedTextField(
-                                value = fromText,
-                                onValueChange = { fromText = it },
-                                label = { Text("Từ gốc") },
-                                placeholder = { Text("vd: nàn") },
-                                singleLine = true,
-                                modifier = Modifier.fillMaxWidth(),
-                            )
-                            OutlinedTextField(
-                                value = toText,
-                                onValueChange = { toText = it },
-                                label = { Text("Thay bằng") },
-                                placeholder = { Text("vd: nàng") },
-                                singleLine = true,
-                                modifier = Modifier.fillMaxWidth(),
-                            )
-                        }
-                    },
-                    confirmButton = {
-                        TextButton(
-                            onClick = {
-                                if (fromText.isNotBlank()) {
-                                    onAddStoryReplacement(fromText, toText)
-                                    showAddDialog = false
-                                }
-                            },
-                        ) {
-                            Text("Thêm")
-                        }
-                    },
-                    dismissButton = {
-                        TextButton(onClick = { showAddDialog = false }) {
-                            Text("Hủy")
-                        }
-                    },
-                )
-            }
+            // Per-story replacements summary & dictionary dialog
+            TextReplacementSummarySection(
+                items = storyReplacements,
+                isGlobal = false,
+                onAdd = onAddStoryReplacement,
+                onUpdate = onUpdateStoryReplacement,
+                onRemove = onRemoveStoryReplacement,
+                onSendToGlobal = onSendToGlobal,
+            )
 
             // Info note
             Surface(

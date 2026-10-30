@@ -2,7 +2,6 @@ package com.personal.apptruyen.di
 
 import com.personal.apptruyen.data.remote.SsTruyenScraper
 import com.personal.apptruyen.data.remote.StorySource
-import com.personal.apptruyen.data.remote.TangThuVienScraper
 import com.personal.apptruyen.data.remote.WikidichScraper
 import dagger.Binds
 import dagger.Module
@@ -16,10 +15,6 @@ import dagger.multibindings.IntoSet
 @Module
 @InstallIn(SingletonComponent::class)
 abstract class ScraperModule {
-
-    @Binds
-    @IntoSet
-    abstract fun bindTangThuVien(impl: TangThuVienScraper): StorySource
 
     @Binds
     @IntoSet

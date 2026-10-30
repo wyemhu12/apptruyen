@@ -137,7 +137,7 @@ class SettingsViewModelTest {
         runTest {
             val prefsFlow =
                 kotlinx.coroutines.flow.MutableStateFlow<Preferences>(
-                    preferencesOf(SettingsKeys.ENABLED_SOURCES to "truyencom,truyenfull,tangthuvien"),
+                    preferencesOf(SettingsKeys.ENABLED_SOURCES to "truyencom,truyenfull,tangthuvien,sstruyen"),
                 )
             every { dataStore.data } returns prefsFlow
             coEvery { dataStore.updateData(any()) } coAnswers {
@@ -149,20 +149,107 @@ class SettingsViewModelTest {
 
             viewModel = SettingsViewModel(dataStore, backupRepository, authRepository)
             val initialState = viewModel.state.first()
-            assertEquals(setOf("tangthuvien"), initialState.enabledSources)
+            assertEquals(setOf("sstruyen"), initialState.enabledSources)
             assertEquals(1, initialState.enabledSources.size)
 
             // Trying to disable the last remaining source must keep it enabled
-            viewModel.toggleSource("tangthuvien")
+            viewModel.toggleSource("sstruyen")
             advanceUntilIdle()
-            assertEquals(setOf("tangthuvien"), viewModel.state.first().enabledSources)
+            assertEquals(setOf("sstruyen"), viewModel.state.first().enabledSources)
 
-            // If prefs only contain legacy IDs, fallback to ALL_SOURCES
-            prefsFlow.value = preferencesOf(SettingsKeys.ENABLED_SOURCES to "truyencom,truyenfull")
+            // Switch to wikidich first, then verify fallback to DEFAULT_SINGLE_SOURCE ("sstruyen") when prefs only contain legacy IDs
+            prefsFlow.value = preferencesOf(SettingsKeys.ENABLED_SOURCES to "wikidich")
             advanceUntilIdle()
-            assertEquals(SettingsViewModel.ALL_SOURCES, viewModel.state.first().enabledSources)
+            assertEquals(setOf("wikidich"), viewModel.state.first().enabledSources)
+
+            prefsFlow.value = preferencesOf(SettingsKeys.ENABLED_SOURCES to "truyencom,truyenfull,tangthuvien")
+            advanceUntilIdle()
+            assertEquals(setOf("sstruyen"), viewModel.state.first().enabledSources)
             assertEquals(
-                3,
+                1,
+                viewModel.state
+                    .first()
+                    .enabledSources.size,
+            )
+        }
+
+    @Test
+    fun `resolveSingleSource normalizes null blank multi-source CSV legacy IDs and whitespace to single active source`() {
+        assertEquals(
+            "sstruyen",
+            com.personal.apptruyen.data.local.SourceIds
+                .resolveSingleSource(null),
+        )
+        assertEquals(
+            "sstruyen",
+            com.personal.apptruyen.data.local.SourceIds
+                .resolveSingleSource(""),
+        )
+        assertEquals(
+            "sstruyen",
+            com.personal.apptruyen.data.local.SourceIds
+                .resolveSingleSource("  "),
+        )
+        assertEquals(
+            "sstruyen",
+            com.personal.apptruyen.data.local.SourceIds
+                .resolveSingleSource("truyenfull,truyencom,tangthuvien"),
+        )
+        assertEquals(
+            "sstruyen",
+            com.personal.apptruyen.data.local.SourceIds
+                .resolveSingleSource(" sstruyen , wikidich "),
+        )
+        assertEquals(
+            "wikidich",
+            com.personal.apptruyen.data.local.SourceIds
+                .resolveSingleSource("wikidich,tangthuvien"),
+        )
+    }
+
+    @Test
+    fun `selectSource switches exclusively to selected source and ignores invalid sourceId`() =
+        runTest {
+            val prefsFlow =
+                kotlinx.coroutines.flow.MutableStateFlow<Preferences>(
+                    preferencesOf(SettingsKeys.ENABLED_SOURCES to "sstruyen"),
+                )
+            every { dataStore.data } returns prefsFlow
+            coEvery { dataStore.updateData(any()) } coAnswers {
+                val transform = firstArg<suspend (Preferences) -> Preferences>()
+                val updated = transform(prefsFlow.value)
+                prefsFlow.value = updated
+                updated
+            }
+
+            viewModel = SettingsViewModel(dataStore, backupRepository, authRepository)
+            assertEquals(setOf("sstruyen"), viewModel.state.first().enabledSources)
+
+            viewModel.selectSource("wikidich")
+            advanceUntilIdle()
+            assertEquals(setOf("wikidich"), viewModel.state.first().enabledSources)
+            assertEquals(
+                1,
+                viewModel.state
+                    .first()
+                    .enabledSources.size,
+            )
+
+            viewModel.selectSource("invalid")
+            advanceUntilIdle()
+            assertEquals(setOf("wikidich"), viewModel.state.first().enabledSources)
+            assertEquals(
+                1,
+                viewModel.state
+                    .first()
+                    .enabledSources.size,
+            )
+
+            viewModel.selectSource("tangthuvien")
+            advanceUntilIdle()
+            assertEquals(setOf("wikidich"), viewModel.state.first().enabledSources)
+            assertEquals(
+                1,
                 viewModel.state
                     .first()
                     .enabledSources.size,
@@ -187,5 +274,79 @@ class SettingsViewModelTest {
             authFlow.value = false
             advanceUntilIdle()
             assertFalse(viewModel.state.first().isWikidichLoggedIn)
+        }
+
+    @Test
+    fun `add update remove custom replacements persist caseSensitive and guard against stale expected item`() =
+        runTest {
+            val prefsFlow =
+                kotlinx.coroutines.flow.MutableStateFlow<Preferences>(
+                    preferencesOf(),
+                )
+            every { dataStore.data } returns prefsFlow
+            coEvery { dataStore.updateData(any()) } coAnswers {
+                val transform = firstArg<suspend (Preferences) -> Preferences>()
+                val updated = transform(prefsFlow.value)
+                prefsFlow.value = updated
+                updated
+            }
+
+            viewModel = SettingsViewModel(dataStore, backupRepository, authRepository)
+            val itemA =
+                com.personal.apptruyen.util
+                    .TextReplacementItem("Mây tía", "Tử Vân", false)
+            val itemB =
+                com.personal.apptruyen.util
+                    .TextReplacementItem("Tu Liên", "tu tiên", false)
+            val itemC =
+                com.personal.apptruyen.util
+                    .TextReplacementItem("nàn", "nàng", true)
+
+            viewModel.addCustomReplacement(itemA.from, itemA.to, itemA.caseSensitive)
+            viewModel.addCustomReplacement(itemB.from, itemB.to, itemB.caseSensitive)
+            viewModel.addCustomReplacement(itemC.from, itemC.to, itemC.caseSensitive)
+            viewModel.addCustomReplacement("   ", "bỏ qua", false)
+            advanceUntilIdle()
+
+            assertEquals(
+                listOf(itemA, itemB, itemC),
+                viewModel.state.first().customReplacements,
+            )
+
+            // TOCTOU simulation: remove itemA at index 0, then attempt stale update on index 1 expecting itemB
+            // (after removing index 0, index 1 is now itemC, so stale update must be safely ignored)
+            viewModel.removeCustomReplacement(0, expected = itemA)
+            viewModel.updateCustomReplacement(
+                index = 1,
+                from = "Tu Liên",
+                to = "tu tiên",
+                caseSensitive = true,
+                expected = itemB,
+            )
+            advanceUntilIdle()
+
+            assertEquals(
+                listOf(itemB, itemC),
+                viewModel.state.first().customReplacements,
+            )
+
+            // Valid update on index 0 expecting itemB
+            viewModel.updateCustomReplacement(
+                index = 0,
+                from = "Tu Liên",
+                to = "tu tiên",
+                caseSensitive = true,
+                expected = itemB,
+            )
+            advanceUntilIdle()
+
+            assertEquals(
+                listOf(
+                    com.personal.apptruyen.util
+                        .TextReplacementItem("Tu Liên", "tu tiên", true),
+                    itemC,
+                ),
+                viewModel.state.first().customReplacements,
+            )
         }
 }

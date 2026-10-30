@@ -47,7 +47,7 @@ class DownloadRepository
 
         companion object {
             const val DOWNLOAD_BATCH_SIZE = 4
-            const val MAX_RETRY_ATTEMPTS = 2
+            const val MAX_RETRY_ATTEMPTS = 3
             const val BASE_BATCH_DELAY_MS = 250L
             const val MAX_BATCH_DELAY_MS = 3000L
             const val MAX_CONSECUTIVE_FAILED_BATCHES = 3
@@ -153,11 +153,42 @@ class DownloadRepository
                     }
                     lastError = e
                     if (attempt < MAX_RETRY_ATTEMPTS) {
-                        delay(retryDelayMs)
+                        val backoffDelay = retryDelayMs * (1L shl (attempt - 1))
+                        delay(backoffDelay)
                     }
                 }
             }
             return ChapterFetchOutcome(chapter = chapter, error = lastError)
+        }
+
+        private suspend fun persistDownloadedChapter(
+            storyId: String,
+            chapter: Chapter,
+            result: ChapterContentResult,
+        ) {
+            val isDummy = chapter.title.matches(DUMMY_TITLE_REGEX)
+            val titleToSave =
+                if (!result.title.isNullOrBlank() && (isDummy || chapter.title.isBlank())) {
+                    result.title
+                } else {
+                    chapter.title
+                }
+            chapterDao.saveChapterContent(
+                storyId = storyId,
+                chapterNumber = chapter.chapterNumber,
+                content = result.content,
+                title = titleToSave,
+                url = chapter.url,
+            )
+
+            if (!result.title.isNullOrBlank() && (isDummy || chapter.title.isBlank())) {
+                chapterDao.updateChapterMetadata(
+                    storyId = storyId,
+                    chapterNumber = chapter.chapterNumber,
+                    title = result.title,
+                    url = chapter.url,
+                )
+            }
         }
 
         override fun downloadChapters(
@@ -178,6 +209,7 @@ class DownloadRepository
                 val isWikidich = source.sourceId == WIKIDICH_SOURCE_ID
                 val batchSize = if (isWikidich) WIKIDICH_BATCH_SIZE else DOWNLOAD_BATCH_SIZE
                 val batches = sortedChapters.chunked(batchSize)
+                val failedChapters = mutableListOf<Chapter>()
 
                 for ((batchIndex, batch) in batches.withIndex()) {
                     currentCoroutineContext().ensureActive()
@@ -203,33 +235,12 @@ class DownloadRepository
                         val chapter = outcome.chapter
                         val result = outcome.result
                         if (result != null) {
-                            val isDummy = chapter.title.matches(DUMMY_TITLE_REGEX)
-                            val titleToSave =
-                                if (!result.title.isNullOrBlank() && (isDummy || chapter.title.isBlank())) {
-                                    result.title
-                                } else {
-                                    chapter.title
-                                }
-                            chapterDao.saveChapterContent(
-                                storyId = storyId,
-                                chapterNumber = chapter.chapterNumber,
-                                content = result.content,
-                                title = titleToSave,
-                                url = chapter.url,
-                            )
-
-                            if (!result.title.isNullOrBlank() && (isDummy || chapter.title.isBlank())) {
-                                chapterDao.updateChapterMetadata(
-                                    storyId = storyId,
-                                    chapterNumber = chapter.chapterNumber,
-                                    title = result.title,
-                                    url = chapter.url,
-                                )
-                            }
+                            persistDownloadedChapter(storyId, chapter, result)
                             downloaded++
                         } else {
                             errors++
                             batchErrors++
+                            failedChapters.add(chapter)
                             Timber.tag("DownloadRepo").e(outcome.error, "Download error for %s", chapter.title)
                             if (
                                 fatalError == null &&
@@ -279,6 +290,41 @@ class DownloadRepository
                             delay(randomDelay)
                         } else {
                             delay(currentDelay)
+                        }
+                    }
+                }
+
+                if (consecutiveFailedBatches < MAX_CONSECUTIVE_FAILED_BATCHES && failedChapters.isNotEmpty()) {
+                    for (chapter in failedChapters.sortedBy { it.chapterNumber }) {
+                        currentCoroutineContext().ensureActive()
+                        val retryInterChapterDelay =
+                            if (isWikidich) {
+                                wikidichDelayProvider().coerceIn(WIKIDICH_MIN_DELAY_MS, WIKIDICH_MAX_DELAY_MS)
+                            } else {
+                                currentDelay
+                            }
+                        if (retryInterChapterDelay > 0L) {
+                            delay(retryInterChapterDelay)
+                        }
+                        val retryDelayMs = if (isWikidich) WIKIDICH_RETRY_DELAY_MS else currentDelay
+                        val outcome = fetchChapterWithRetry(source, chapter, retryDelayMs)
+                        currentCoroutineContext().ensureActive()
+                        val result = outcome.result
+                        if (result != null) {
+                            persistDownloadedChapter(storyId, chapter, result)
+                            downloaded++
+                            errors = (errors - 1).coerceAtLeast(0)
+                            emit(DownloadProgress(downloaded, sortedChapters.size, chapter.title, errors))
+                        } else {
+                            val fatalRetryError =
+                                outcome.error?.takeIf { err ->
+                                    err is ScraperException.LoginRequiredException ||
+                                        err is ScraperException.CircuitOpenException ||
+                                        (isWikidich && isRateLimitHttpError(err))
+                                } as? ScraperException
+                            if (fatalRetryError != null) {
+                                throw fatalRetryError
+                            }
                         }
                     }
                 }

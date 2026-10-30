@@ -6,6 +6,106 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 
 ## [Unreleased]
 
+## [3.0.8] - 2026-10-30 (versionCode 56)
+
+### Thêm mới
+
+- **Bật/tắt phân biệt chữ hoa/thường (`caseSensitive`) khi Thay chữ & Thiết kế lại giao diện quản lý "Từ điển" thay chữ (`TextReplacementHelper.kt`, `ITextReplacementRepository.kt`, `TextReplacementRepository.kt`, `TextReplacementDictionaryDialog.kt`, `SettingsViewModel.kt`, `SettingsScreen.kt`, `ReaderViewModel.kt`, `ReaderSettingsPanel.kt`, `ReaderScreen.kt`) (2026-10-30)**:
+  - **Tùy chọn Phân biệt hoa thường (`caseSensitive: Boolean`) cho từng quy tắc thay chữ**:
+    - Bổ sung `TextReplacementItem(from, to, caseSensitive = false)` cùng `applyReplacementItems`, `applyAllReplacementItems`, `parseReplacementItems`, `serializeReplacementItems` trong `TextReplacementHelper.kt` sử dụng `String.replace(item.from, item.to, ignoreCase = !item.caseSensitive)`.
+    - Theo quyết định sản phẩm `PD-1` (Phương án B), các mục cũ đã lưu chưa có khóa `"caseSensitive"` trong JSON được tự động nạp với `caseSensitive = false` (không phân biệt hoa/thường), đồng bộ với mặc định của mục mới tạo trên giao diện.
+    - Bổ sung `updateStoryReplacement` và khóa đồng bộ `storyReplacementMutex` + `dataStore.edit` nguyên tử kèm kiểm tra `expected: TextReplacementItem?` chống lệch chỉ mục (TOCTOU) trong `TextReplacementRepository`, `SettingsViewModel`, và `ReaderViewModel` (`ReaderIntent.UpdateStoryReplacement` tự động chạy `reprocessCurrentChapter()`).
+    - Nâng cấp `sendReplacementToGlobal(from, to, caseSensitive)` hỗ trợ cập nhật `caseSensitive` tại chỗ khi từ đã tồn tại trong cài đặt chung và đồng bộ tức thời `customReplacements` trong bộ nhớ `ReaderViewModel`.
+  - **Giao diện "Từ điển" thay chữ & Hộp thoại "Thông tin" dùng chung (`ui/components/TextReplacementDictionaryDialog.kt`)**:
+    - Thay thế danh sách liệt kê phẳng kéo dài màn hình trên `SettingsScreen` và `ReaderSettingsPanel` bằng khối tóm tắt gọn gàng (`TextReplacementSummarySection`: xem nhanh tối đa 3 từ đầu, nút `"Từ điển (N)"` và nút `"Thêm từ"`), giúp giảm `ReaderSettingsPanel.kt` từ 633 dòng xuống 531 dòng.
+    - Hộp thoại toàn màn hình **`"Từ điển"`** (`TextReplacementDictionaryDialog`): có thanh tìm kiếm từ khóa `"Nhập từ khóa"` lọc tức thì theo từ gốc hoặc từ thay thế, bảng 4 cột kẻ khung rõ ràng (`Tìm` | `Thay thế` | `Hoa thường` Checkbox bật/tắt trực tiếp | `Xóa` `✕`, kèm cột `Chung` 🌐 cho từ điển riêng của truyện), và chạm vào dòng bất kỳ để sửa trực tiếp.
+    - Hộp thoại **`"Thông tin"`** (`TextReplacementEditDialog`): hiển thị câu xem trước (preview) động làm nổi bật từ gốc và từ thay thế (`"Tất cả những từ: ... sẽ được thay bằng ... trong tất cả các bộ truyện / trong bộ truyện này"`), 2 ô nhập `"Từ cần thay thế"` / `"Từ thay thế"`, hàng `"Phân biệt hoa thường"` kèm `Checkbox`, và nút `"Lưu lại"` / `"Đóng lại"`.
+    - Bổ sung 10 unit tests mới trong `TextReplacementHelperTest`, `TextReplacementRepositoryTest`, `SettingsViewModelTest`, và `ReaderViewModelTest`.
+
+### Xóa bỏ
+
+- **Gỡ bỏ hoàn toàn nguồn Tàng Thư Viện (`tangthuvien` / `tangthuvien.org` / `truyen.tangthuvien.vn`) khỏi danh sách nguồn hoạt động (`ScraperModule.kt`, `WebViewContentLoader.kt`, `CoilImageInterceptor.kt`, `SettingsDataStore.kt`, `StoryRepository.kt`, `SettingsScreen.kt`) (2026-10-30)**:
+  - **Xóa scraper trực tuyến & chặn kết nối tới tên miền giả mạo `tangthuvien.org`**:
+    - Xóa `TangThuVienScraper.kt`, `TangThuVienScraperTest.kt` và gỡ `@Binds @IntoSet bindTangThuVien` khỏi `ScraperModule.kt`.
+    - Xóa `"tangthuvien.org"` và `"tangthuvien.vn"` khỏi `WebViewContentLoader.ALLOWED_DOMAINS`.
+    - Bổ sung `BLOCKED_IMAGE_HOSTS = setOf("tangthuvien.org", "tangthuvien.vn")` và `isBlockedHost(host)` trong `CoilImageInterceptor.kt` để ném `IOException` chặn ngay từ đầu mọi request ảnh bìa tới tên miền `tangthuvien.org`/`tangthuvien.vn` trước khi chạm mạng; đồng thời gỡ nhánh `Referer` của Tàng Thư Viện trong `resolveRefererForHost`.
+  - **Chuyển nguồn mặc định sang `SsTruyện` & Bảo toàn 100% dữ liệu đọc offline**:
+    - Cập nhật `SourceIds` trong `SettingsDataStore.kt`: đặt `DEFAULT_SINGLE_SOURCE = SSTRUYEN` (`"sstruyen"`), `ORDERED_SOURCES = listOf(SSTRUYEN, WIKIDICH)`, `ALL_ACTIVE_SOURCES = setOf(SSTRUYEN, WIKIDICH)`, đưa `TANGTHUVIEN` vào `DEPRECATED_SOURCES`, và gỡ `TANGTHUVIEN` khỏi `SOURCE_LABELS` (tự động di trú người dùng đang chọn `"tangthuvien"` sang `"sstruyen"` qua `resolveSingleSource`).
+    - Bổ sung `deprecatedSourceIdForUrl(url)` (dùng `toHttpUrlOrNull()`) trong `StoryRepository.findCachedStory` để tra cứu cả ID mới `"tangthuvien_<slug>"` lẫn ID cũ `"<slug>"` (kèm kiểm tra `it.sourceId == deprecatedSourceId` chống mở nhầm truyện nguồn khác có cùng `rawSlug`).
+    - Cập nhật dòng giới thiệu nguồn tại `SettingsScreen.kt` thành `"Đa nguồn: SsTruyện • Wikidich"`; giữ nguyên badge `"TTV"` trên `StoryCardPremium.kt` cho các truyện đã lưu trong Tủ truyện.
+
+### Sửa đổi
+
+- **Đơn Nguồn Hoạt Động đồng bộ 2 chiều & Chuẩn hóa 19 Thể loại `Loại hình` chính thống của Wikidich (`SettingsDataStore.kt`, `StoryRepository.kt`, `SettingsViewModel.kt`, `SettingsScreen.kt`, `SearchViewModel.kt`, `SearchScreen.kt`, `ExploreViewModel.kt`, `ExploreScreen.kt`, `WikidichScraper.kt`) (2026-10-30)**:
+  - **Chỉ 1 nguồn hoạt động tại một thời điểm (`SourceIds.resolveSingleSource`)**:
+    - Bổ sung `SourceIds.DEFAULT_SINGLE_SOURCE = "tangthuvien"`, `SourceIds.ORDERED_SOURCES`, và `SourceIds.resolveSingleSource(rawCsv)` tự động chuẩn hóa mọi giá trị CSV cũ trong `SettingsKeys.ENABLED_SOURCES` (kể cả khi `migrateWikidichEnabledSourcesIfNeeded()` hoặc `restoreSettingFromBackup()` chạy) về 1 nguồn hợp lệ duy nhất.
+    - Bổ sung `IStoryRepository.observeActiveSource(): Flow<String>` và `setActiveSource(sourceId: String)`; đồng bộ 2 chiều giữa **Cài đặt** (`RadioButton` đơn chọn), **Tìm kiếm** (mục `"Nguồn truyện"` trong `FilterBottomSheet` + chip `"Nguồn: ..."` dưới thanh tìm kiếm), và **Khám Phá** (hàng chip chọn nguồn ở đầu màn hình).
+    - Khi đổi nguồn trên `SearchScreen` hoặc `ExploreScreen`, hệ thống tự động tải lại danh sách thể loại (`genres`) của nguồn mới, reset `selectedGenre` về `null` nếu thể loại cũ không thuộc nguồn mới, và chỉ hiển thị / tính công tắc `"Truyện nam"` (`maleOnly`) khi nguồn đang chọn là `Wikidich`. Các truyện đã lưu trong Tủ truyện vẫn đọc/tải bình thường qua `sourceFor(url)` bất kể nguồn đang chọn.
+  - **Chuẩn hóa `WikidichScraper.getGenreList()` và `GENRE_QUERY_MAP` về đúng 19 thể loại `Loại hình` chính thống (`genre=<24-hex ObjectId>`)**:
+    - Cập nhật danh sách thể loại Wikidich về đúng 19 mục thuộc nhóm `Loại hình` trên `wikicv.org`: `Tình cảm`, `Làm sự nghiệp`, `Tiên hiệp`, `Huyền huyễn`, `Khoa học viễn tưởng`, `Mạt thế`, `Sinh tồn`, `Tranh bá`, `Võ hiệp`, `Trinh thám`, `Kinh dị`, `Quan trường`, `Kinh thương`, `Quân sự`, `Xây dựng`, `Làm ruộng`, `Huyền học`, `Phim ảnh`, `Manga anime`.
+    - Gỡ bỏ mục cũ ngừng sử dụng `Võng du` (`vong-du`) cùng toàn bộ các nhãn phụ `tag=`, `age=`, `official=`, `ending=` khỏi danh sách thể loại UI của Wikidich.
+
+### Fix bug
+
+- **Khắc phục lỗi sập ứng dụng (`FATAL EXCEPTION: main`) khi bấm vào truyện trên `StoryDetailViewModel`, đồng bộ `pageSize = 501` trên `WikidichScraper` & lọc bỏ liên kết thể loại `hasPart` trên `SsTruyenScraper` (`StoryDetailViewModel.kt`, `WikidichScraper.kt`, `SsTruyenScraper.kt`, `StoryRepository.kt`) (2026-10-30)**:
+  - **Sửa lỗi vi phạm Structured Concurrency gây crash `StoryDetailViewModel.loadStoryDetail()` (`StoryDetailViewModel.kt`)**:
+    - Bọc cặp `async { repository.getFirstPageChapterList(...) }` và `async { readingProgressRepository.getReadingProgress(...) }` trong `coroutineScope { ... }` để ngoại lệ phát sinh bên trong `async` được bắt an toàn bởi khối `try / catch (e: Exception)` của `loadStoryDetail()` và hiển thị thông báo tiếng Việt trên `StoryDetailScreen`, thay vì truyền thẳng lên `StandaloneCoroutine` làm sập ứng dụng trên `Dispatchers.Main`.
+  - **Đồng bộ `pageSize` động (`loadBookIndex(0, 501, false)`) trên `WikidichScraper` (`WikidichScraper.kt`)**:
+    - Bổ sung `extractPageSize(html)` trích xuất động kích thước trang chương từ script `loadBookIndex(0, <size>, ...)` trên `wikicv.org` (hiện là `501` chương/trang, fallback `DEFAULT_PAGE_SIZE = 99`) và áp dụng đồng nhất cho `getFirstPageChapters`, `getRemainingChapters`, và `fetchTotalChaptersFromBookIndex`; bổ sung header `Accept: */*`, `Accept-Language` trong `fetchAjaxFragment`.
+  - **Chặn `SsTruyenScraper.parseStoryList` parse nhầm mục thể loại thành truyện (`SsTruyenScraper.kt`, `StoryRepository.kt`)**:
+    - Thêm điều kiện kiểm tra `!href.contains("/truyen/")` trong nhánh `a[itemProp=hasPart]` của `SsTruyenScraper.parseStoryList` để bỏ qua 6 thẻ đề xuất thể loại (`/the-loai/...`) trên trang chủ `sstruyen.pics`.
+    - Bảo toàn `ScraperException` / `cause` và ghi log `Timber.w` khi `getFirstPageChapterList` hoặc `getChapterList` thất bại trong `StoryRepository.kt`.
+    - Bổ sung 3 unit tests tái hiện lỗi trong `StoryDetailViewModelTest`, `WikidichScraperTest`, và `SsTruyenScraperTest`.
+
+- **Khắc phục lỗi tìm kiếm từ khóa trên Wikidich phớt lờ bộ lọc thể loại & lỗi nhảy cóc chương khi tải offline mạng chập chờn (`WikidichScraper.kt`, `SearchViewModel.kt`, `DownloadRepository.kt`, `StoryDetailViewModel.kt`) (2026-10-30)**:
+  - **Tìm kiếm từ khóa kết hợp thể loại, `maleOnly`, `completedOnly` và phân trang trên Wikidich**:
+    - Mở rộng `StorySource.search` và `WikidichScraper.search(keyword, completedOnly, page, maleOnly, genreSlug)` xây dựng URL server-side `/tim-kiem?q=$encoded&qs=1$genreParam$genderParam$statusParam$startParam`, kiểm tra `checkLoginRequired(doc)`, lọc hậu kiểm qua `filterStories` với đầy đủ 7 nhãn `NON_MALE_WIKIDICH_GENDERS` (`"ngôn tình"`, `"đam mỹ"`, `"bách hợp"`, `"nữ tần"`, `"nữ tôn"`, `"không cp"`, `"đa nguyên"`), và làm giàu số chương qua `enrichWithChapterCounts`.
+    - Bổ sung `lastSubmittedQuery` và mở khóa phân trang `loadMoreFilterResults()` cho cả tìm kiếm từ khóa trên Wikidich lẫn chế độ duyệt bộ lọc không thể loại (`browseByFilterOnly`).
+  - **Chống nhảy cóc chương khi tải offline (`DownloadRepository.kt`, `StoryDetailViewModel.kt`)**:
+    - Nâng `MAX_RETRY_ATTEMPTS = 3` kèm exponential backoff (`retryDelayMs * (1L shl (attempt - 1))`) trong `DownloadRepository.fetchChapterWithRetry`.
+    - Tách hàm dùng chung `persistDownloadedChapter(storyId, chapter, result)` và bổ sung lượt tải bù `retryPass` cuối phiên cho các chương lỗi tạm thời (tuân thủ `wikidichDelayProvider()` và dừng ngay nếu gặp `LoginRequiredException`, `CircuitOpenException`, hoặc HTTP `403`/`429`/`503` trên Wikidich).
+    - Bổ sung `.sortedBy { it.chapterNumber }` vào `StoryDetailViewModel.downloadChapters(count)` và `downloadAll()`.
+    - Bổ sung 14 unit tests mới trong `WikidichScraperTest`, `StoryRepositoryTest`, `SettingsViewModelTest`, `SearchViewModelTest`, `ExploreViewModelTest`, `DownloadRepositoryTest`, và `StoryDetailViewModelTest`.
+
+## [3.0.7] - 2026-10-28 (versionCode 55)
+
+### Sửa đổi
+
+- **Bật Gradle Configuration Cache (2026-10-28)**:
+  - Thêm `org.gradle.configuration-cache=true` vào `gradle.properties` và đóng luồng `inputStream().use { load(it) }` khi đọc `keystore.properties` trong `app/build.gradle.kts` để tái sử dụng đồ thị cấu hình giữa các lần build.
+
+### Fix bug
+
+- **Khắc phục lỗi không tải được ảnh bìa Wikidich khi cuộn danh sách tìm kiếm và khi mở trang chi tiết truyện (2026-10-28)**:
+  - **Cấu hình `SingletonImageLoader.Factory` & `CoilImageInterceptor` cho Coil 3 (`AppTruyenApplication.kt`, `CoilModule.kt`, `CoilImageInterceptor.kt`)**:
+    - Cài đặt `SingletonImageLoader.Factory` trên `AppTruyenApplication` và gắn `OkHttpNetworkFetcherFactory(callFactory = { imageOkHttpClient })` trong `CoilModule` sử dụng `buildImageOkHttpClient(okHttpClient)` kế thừa `ResilientDohDns` và `readTimeout = 30s` từ `AppModule`.
+    - Thiết lập `Dispatcher` riêng (`maxRequests = 32`, `maxRequestsPerHost = 4`), `ReadOnlyWikidichCookieJar` (chỉ đọc cookie cho `wikicv.org`, không lưu `Set-Cookie` từ CDN ảnh bên thứ ba), và `CoilImageInterceptor` gắn `User-Agent` đồng bộ `WikidichScraper.DESKTOP_UA` (`Chrome/122.0.0.0`), `Referer` theo từng nguồn (`wikicv.org`, `sstruyen.pics`, `tangthuvien.org`/`tangthuvien.vn`), tự động retry tối đa 1 lần khi gặp HTTP `502`/`503`/`504` (có `response.close()`) hoặc `SocketTimeoutException` khi `!call.isCanceled()`, kèm log probe `CoilNet` theo dõi `inFlight` theo host ở bản debug.
+  - **Chuẩn hóa URL ảnh bìa Wikidich bỏ tham số `?o=1` & Đồng bộ `safeCoverUrl` (`WikidichScraper.kt`, `StoryRepository.kt`)**:
+    - Thêm `WikidichScraper.extractCoverUrl` duyệt `[src, data-src]`, lọc bỏ ảnh mặc định (`default-cover`, `default-avatar`, `data:`/`base64`) và dùng `HttpUrl.removeAllQueryParameters("o")` loại bỏ tham số `?o=1` trên đường dẫn `/photo/<id>` để trang chi tiết dùng chung ảnh thumbnail (~20–44 KB) và trùng cache key với danh sách tìm kiếm, tránh phải tải lại file ảnh gốc (~690.9 KB, `cf-cache-status: DYNAMIC`).
+    - Mở rộng `StoryRepository.upgradeToHttps` loại bỏ tham số `o` trên host `wikicv.org` đường dẫn `/photo/` (tự động làm sạch cả các bản ghi cũ trong Room DB khi đọc qua `toDomain()`), và sửa `StoryRepository.getStoryDetail` (nhánh không cache) trả về `resolvedStory` đã gộp `safeCoverUrl`.
+    - Bổ sung 12 unit tests mới trong `CoilImageInterceptorTest`, `WikidichScraperTest`, và `StoryRepositoryTest`.
+
+## [3.0.6] - 2026-10-28 (versionCode 54)
+
+### Thêm mới
+
+- **Bộ lọc độc lập "Truyện nam" & Sắp xếp "Mới nhất" cho nguồn Wikidich (`wikicv.org`) (2026-10-28)**:
+  - **Tách riêng mục lọc "Truyện nam" (`maleOnly = true` mặc định)**:
+    - Trên **Khám Phá (`ExploreScreen`, `ExploreViewModel`)**: Bổ sung `FilterChip` `"Truyện nam"` cố định ở đầu hàng bộ lọc, tách biệt với danh sách thể loại bằng `VerticalDivider`, cho phép bật/tắt song song với bất kỳ thể loại nào (hoặc khi chọn `"Tất cả"`) và bảo toàn trạng thái khi phân trang (`loadMore`) hay kéo làm mới (`pullToRefresh`).
+    - Trên **Tìm Kiếm (`SearchScreen`, `SearchViewModel`)**: Bổ sung mục riêng `"Đối tượng độc giả (Wikidich)"` với `FilterChip` `"Truyện nam"` trong `FilterBottomSheet`, tích hợp vào bộ đếm badge `activeFilterCount`, hàng `InputChip` xóa nhanh (`"Cả truyện nữ/khác"` khi tắt lọc nam) và bộ lọc cục bộ `applyLocalFilters` (chuẩn hóa Unicode NFC, chỉ lọc các nhãn `"ngôn tình"`, `"đam mỹ"`, `"bách hợp"`, `"nữ tần"` đối với truyện có `sourceId == "wikidich"`, giữ nguyên kết quả từ Tàng Thư Viện và SsTruyện).
+  - **Chuẩn hóa URL lọc `qs=2` & Sắp xếp "Mới nhất" (`so=4&vo=1`) trong `WikidichScraper`**:
+    - Chuyển URL `getStoriesByGenre` từ `qs=1` sang `/tim-kiem?qs=2&{filterParam}[&gender=5794f03dd7ced228f4419196][&status=5794f03dd7ced228f4419191]&so=4&vo=1[&start={start}]`, loại bỏ các tham số cũ (`tc`, `tf=0`, `m`, `y`, `q=`) để luôn sắp xếp theo **Mới nhất** thay vì mặc định "Đọc nhiều nhất".
+    - Định tuyến `getCompletedStories(page, maleOnly)`: khi `maleOnly = true` gọi `/tim-kiem?qs=2&gender=5794f03dd7ced228f4419196&status=5794f03dd7ced228f4419191&so=4&vo=1`; khi `maleOnly = false` ưu tiên nhánh nhanh `/bang-xep-hang?so=5` kèm fallback `/tim-kiem?qs=2&status=5794f03dd7ced228f4419191&so=4&vo=1`.
+    - Gỡ bỏ 4 tag giới tính (`truyen-nam`, `ngon-tinh`, `dam-my`, `bach-hop`) khỏi `WikidichScraper.GENRE_QUERY_MAP` và `getGenreList()`.
+    - Bổ sung 15 unit tests mới trong `WikidichScraperTest`, `StoryRepositoryTest`, `ExploreViewModelTest`, và `SearchViewModelTest`.
+
+### Sửa đổi
+
+- **Nâng cấp Android Gradle Plugin (AGP) lên `9.4.1` (2026-10-27)**:
+  - Cập nhật `com.android.application` từ `9.4.0` lên `9.4.1` trong `build.gradle.kts` (bản vá ổn định khắc phục hiệu năng D8/R8 và đồng bộ với khuyến nghị của Android Studio `2026.2.1`).
+
+## [3.0.5] - 2026-10-23 (versionCode 53)
+
 ### Nâng cấp Quản trị AI Agent (`.agents/`)
 
 - **Nâng cấp Hệ thống Rules, Subagents, Skills & Code Freeze Guard theo Vikini Governance 2.0 (2026-10-23)**:

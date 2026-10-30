@@ -20,6 +20,7 @@ class SearchViewModelTest {
     private lateinit var repository: IStoryRepository
     private lateinit var searchHistoryRepository: SearchHistoryRepository
     private lateinit var authRepository: com.personal.apptruyen.data.repository.ISourceAuthRepository
+    private lateinit var activeSourceFlow: kotlinx.coroutines.flow.MutableStateFlow<String>
     private lateinit var viewModel: SearchViewModel
     private val dispatcher = UnconfinedTestDispatcher()
 
@@ -40,6 +41,12 @@ class SearchViewModelTest {
         repository = mockk(relaxed = true)
         searchHistoryRepository = mockk(relaxed = true)
         authRepository = mockk(relaxed = true)
+        activeSourceFlow =
+            kotlinx.coroutines.flow.MutableStateFlow(
+                com.personal.apptruyen.data.local.SourceIds.DEFAULT_SINGLE_SOURCE,
+            )
+        every { repository.observeActiveSource() } returns activeSourceFlow
+        coEvery { repository.setActiveSource(any()) } answers { activeSourceFlow.value = firstArg() }
         every { authRepository.loginRequiredSources } returns kotlinx.coroutines.flow.MutableStateFlow(emptySet())
 
         coEvery { repository.getGenreList() } returns
@@ -180,7 +187,7 @@ class SearchViewModelTest {
         runTest {
             val shortStory = sampleStory.copy(id = "short.1", title = "Truyện Ngắn", totalChapters = 50)
             val longStory = sampleStory.copy(id = "long.1", title = "Truyện Dài", totalChapters = 350)
-            coEvery { repository.getCompletedStories(1) } returns listOf(shortStory, longStory)
+            coEvery { repository.getCompletedStories(1, true) } returns listOf(shortStory, longStory)
 
             viewModel = SearchViewModel(repository, searchHistoryRepository, authRepository)
             advanceUntilIdle()
@@ -193,7 +200,7 @@ class SearchViewModelTest {
             assertTrue(stateAfterFilter.isFilterActive)
             assertEquals(1, stateAfterFilter.results.size)
             assertEquals("Truyện Dài", stateAfterFilter.results[0].title)
-            coVerify { repository.getCompletedStories(1) }
+            coVerify { repository.getCompletedStories(1, true) }
 
             viewModel.clearAllFilters()
             advanceUntilIdle()
@@ -208,8 +215,8 @@ class SearchViewModelTest {
     fun `loadMoreFilterResults stops canLoadMore when duplicate results returned or exception thrown`() =
         runTest {
             val genre = Genre(name = "Tiên Hiệp", slug = "tien-hiep", categoryId = 1)
-            coEvery { repository.getStoriesByGenre(genre.slug, 1, 0, true) } returns listOf(sampleStory)
-            coEvery { repository.getStoriesByGenre(genre.slug, 2, 0, true) } returns listOf(sampleStory)
+            coEvery { repository.getStoriesByGenre(genre.slug, 1, 0, true, true) } returns listOf(sampleStory)
+            coEvery { repository.getStoriesByGenre(genre.slug, 2, 0, true, true) } returns listOf(sampleStory)
 
             viewModel = SearchViewModel(repository, searchHistoryRepository, authRepository)
             advanceUntilIdle()
@@ -223,5 +230,319 @@ class SearchViewModelTest {
 
             assertEquals(1, viewModel.state.value.results.size)
             assertFalse(viewModel.state.value.canLoadMore)
+        }
+
+    @Test
+    fun `toggleMaleFilter updates state and triggers search or browse`() =
+        runTest {
+            coEvery { repository.getCompletedStories(1, any()) } returns listOf(sampleStory)
+
+            viewModel = SearchViewModel(repository, searchHistoryRepository, authRepository)
+            advanceUntilIdle()
+
+            // First trigger a filter search so hasSearched = true
+            viewModel.applyAllFilters(null, ChapterCountFilter.OVER_200, completedOnly = true, maleOnly = true)
+            advanceUntilIdle()
+            assertTrue(viewModel.state.value.hasSearched)
+            assertTrue(viewModel.state.value.maleOnly)
+
+            viewModel.toggleMaleFilter()
+            advanceUntilIdle()
+
+            assertFalse(viewModel.state.value.maleOnly)
+            assertTrue(viewModel.state.value.isFilterActive)
+            coVerify { repository.getCompletedStories(1, false) }
+        }
+
+    @Test
+    fun `toggleCompletedFilter does not reset maleOnly when maleOnly is false`() =
+        runTest {
+            activeSourceFlow.value = com.personal.apptruyen.data.local.SourceIds.WIKIDICH
+            coEvery { repository.getCompletedStories(1, any()) } returns listOf(sampleStory)
+
+            viewModel = SearchViewModel(repository, searchHistoryRepository, authRepository)
+            advanceUntilIdle()
+
+            // Turn off both maleOnly and completedOnly via applyAllFilters (sets hasSearched = true)
+            viewModel.applyAllFilters(
+                genre = null,
+                chapterFilter = ChapterCountFilter.NONE,
+                completedOnly = false,
+                maleOnly = false,
+            )
+            advanceUntilIdle()
+            assertFalse(viewModel.state.value.maleOnly)
+            assertFalse(viewModel.state.value.completedOnly)
+            assertTrue(viewModel.state.value.isFilterActive)
+
+            clearMocks(repository, answers = false)
+            // Re-enable completedOnly = true; maleOnly must remain false and isFilterActive must remain true
+            viewModel.toggleCompletedFilter()
+            advanceUntilIdle()
+
+            assertTrue(viewModel.state.value.completedOnly)
+            assertFalse(viewModel.state.value.maleOnly)
+            assertTrue(viewModel.state.value.isFilterActive)
+            assertTrue(viewModel.state.value.hasSearched)
+            coVerify { repository.getCompletedStories(page = 1, maleOnly = false) }
+        }
+
+    @Test
+    fun `browseByGenre forwards maleOnly to repository`() =
+        runTest {
+            val genre = Genre(name = "Hệ Thống", slug = "he-thong")
+            coEvery { repository.getStoriesByGenre("he-thong", 1, 0, true, false) } returns listOf(sampleStory)
+
+            viewModel = SearchViewModel(repository, searchHistoryRepository, authRepository)
+            advanceUntilIdle()
+
+            viewModel.applyAllFilters(
+                genre = genre,
+                chapterFilter = ChapterCountFilter.NONE,
+                completedOnly = true,
+                maleOnly = false,
+            )
+            advanceUntilIdle()
+
+            assertEquals(1, viewModel.state.value.results.size)
+            coVerify { repository.getStoriesByGenre("he-thong", 1, 0, true, false) }
+        }
+
+    @Test
+    fun `browseByFilterOnly forwards maleOnly to repository`() =
+        runTest {
+            activeSourceFlow.value = com.personal.apptruyen.data.local.SourceIds.WIKIDICH
+            coEvery { repository.getCompletedStories(1, false) } returns listOf(sampleStory)
+
+            viewModel = SearchViewModel(repository, searchHistoryRepository, authRepository)
+            advanceUntilIdle()
+
+            viewModel.applyAllFilters(
+                genre = null,
+                chapterFilter = ChapterCountFilter.NONE,
+                completedOnly = true,
+                maleOnly = false,
+            )
+            advanceUntilIdle()
+
+            assertEquals(1, viewModel.state.value.results.size)
+            coVerify { repository.getCompletedStories(1, false) }
+        }
+
+    @Test
+    fun `loadMoreFilterResults forwards maleOnly to repository`() =
+        runTest {
+            val genre = Genre(name = "Hệ Thống", slug = "he-thong")
+            val page2Story = sampleStory.copy(id = "search-test.2", title = "Trang 2")
+            coEvery { repository.getStoriesByGenre("he-thong", 1, 0, true, false) } returns listOf(sampleStory)
+            coEvery { repository.getStoriesByGenre("he-thong", 2, 0, true, false) } returns listOf(page2Story)
+
+            viewModel = SearchViewModel(repository, searchHistoryRepository, authRepository)
+            advanceUntilIdle()
+
+            viewModel.applyAllFilters(
+                genre = genre,
+                chapterFilter = ChapterCountFilter.NONE,
+                completedOnly = true,
+                maleOnly = false,
+            )
+            advanceUntilIdle()
+
+            viewModel.loadMoreFilterResults()
+            advanceUntilIdle()
+
+            assertEquals(2, viewModel.state.value.results.size)
+            coVerify { repository.getStoriesByGenre("he-thong", 2, 0, true, false) }
+        }
+
+    @Test
+    fun `applyLocalFilters filters wikidich non-male stories and preserves other sources`() =
+        runTest {
+            val wikidichMale =
+                sampleStory.copy(
+                    id = "wd.male",
+                    title = "Wikidich Nam Sinh",
+                    sourceId = "wikidich",
+                    genres = listOf("Nam sinh", "Hệ thống"),
+                )
+            val wikidichNgonTinhNfd =
+                sampleStory.copy(
+                    id = "wd.ngontinh",
+                    title = "Wikidich Ngôn Tình",
+                    sourceId = "wikidich",
+                    genres = listOf(java.text.Normalizer.normalize("Ngôn tình", java.text.Normalizer.Form.NFD)),
+                )
+            val wikidichDamMy =
+                sampleStory.copy(
+                    id = "wd.dammy",
+                    title = "Wikidich Đam Mỹ",
+                    sourceId = "wikidich",
+                    genres = listOf("Đam mỹ"),
+                )
+            val ttvNgonTinh =
+                sampleStory.copy(
+                    id = "ttv.ngontinh",
+                    title = "TTV Ngôn Tình",
+                    sourceId = "tangthuvien",
+                    genres = listOf("Ngôn tình"),
+                )
+            val sstDamMy =
+                sampleStory.copy(
+                    id = "sst.dammy",
+                    title = "SST Đam Mỹ",
+                    sourceId = "sstruyen",
+                    genres = listOf("Đam mỹ"),
+                )
+
+            coEvery { repository.searchStories("test", false) } returns
+                listOf(
+                    wikidichMale,
+                    wikidichNgonTinhNfd,
+                    wikidichDamMy,
+                    ttvNgonTinh,
+                    sstDamMy,
+                )
+
+            viewModel = SearchViewModel(repository, searchHistoryRepository, authRepository)
+            advanceUntilIdle()
+
+            viewModel.onQueryChange("test")
+            viewModel.search()
+            advanceUntilIdle()
+
+            val resultIds =
+                viewModel.state.value.results
+                    .map { it.id }
+            assertEquals(listOf("wd.male", "ttv.ngontinh", "sst.dammy"), resultIds)
+        }
+
+    @Test
+    fun `selectSource updates activeSource reloads genres and resets incompatible selectedGenre`() =
+        runTest {
+            activeSourceFlow.value = "wikidich"
+            val wikiGenre = Genre("Làm sự nghiệp", "lam-su-nghiep")
+            val sstGenre = Genre("Tiên Hiệp", "tien-hiep")
+            coEvery { repository.getGenreList() } returns listOf(wikiGenre)
+            coEvery { repository.getStoriesByGenre("lam-su-nghiep", 1, 0, true, true) } returns listOf(sampleStory)
+
+            viewModel = SearchViewModel(repository, searchHistoryRepository, authRepository)
+            advanceUntilIdle()
+
+            viewModel.applyAllFilters(
+                genre = wikiGenre,
+                chapterFilter = ChapterCountFilter.NONE,
+                completedOnly = true,
+                maleOnly = true,
+            )
+            advanceUntilIdle()
+            assertEquals("wikidich", viewModel.state.value.activeSource)
+            assertEquals(wikiGenre, viewModel.state.value.selectedGenre)
+
+            coEvery { repository.getGenreList() } returns listOf(sstGenre)
+            viewModel.selectSource("sstruyen")
+            advanceUntilIdle()
+
+            assertEquals("sstruyen", viewModel.state.value.activeSource)
+            assertEquals(listOf(sstGenre), viewModel.genres.value)
+            assertNull(viewModel.state.value.selectedGenre)
+            assertFalse(viewModel.state.value.isFilterActive)
+        }
+
+    @Test
+    fun `search with keyword and genre on wikidich forwards parameters to repository and loadMoreFilterResults fetches next page`() =
+        runTest {
+            activeSourceFlow.value = "wikidich"
+            val wikiGenre = Genre("Tiên hiệp", "tien-hiep")
+            val page1Story = sampleStory.copy(id = "wd.1", sourceId = "wikidich", genres = listOf("Nam sinh", "Tiên hiệp"))
+            val page2Story = sampleStory.copy(id = "wd.2", sourceId = "wikidich", genres = listOf("Nam sinh", "Tiên hiệp"))
+
+            coEvery {
+                repository.searchStories(
+                    keyword = "tiên",
+                    completedOnly = true,
+                    page = 1,
+                    maleOnly = true,
+                    genreSlug = "tien-hiep",
+                )
+            } returns listOf(page1Story)
+
+            coEvery {
+                repository.searchStories(
+                    keyword = "tiên",
+                    completedOnly = true,
+                    page = 2,
+                    maleOnly = true,
+                    genreSlug = "tien-hiep",
+                )
+            } returns listOf(page2Story)
+
+            viewModel = SearchViewModel(repository, searchHistoryRepository, authRepository)
+            advanceUntilIdle()
+
+            viewModel.onQueryChange("tiên")
+            viewModel.applyAllFilters(
+                genre = wikiGenre,
+                chapterFilter = ChapterCountFilter.NONE,
+                completedOnly = true,
+                maleOnly = true,
+            )
+            advanceUntilIdle()
+
+            assertEquals(1, viewModel.state.value.results.size)
+            assertTrue(viewModel.state.value.canLoadMore)
+            coVerify(exactly = 1) {
+                repository.searchStories(
+                    keyword = "tiên",
+                    completedOnly = true,
+                    page = 1,
+                    maleOnly = true,
+                    genreSlug = "tien-hiep",
+                )
+            }
+
+            viewModel.loadMoreFilterResults()
+            advanceUntilIdle()
+
+            assertEquals(2, viewModel.state.value.results.size)
+            assertEquals(2, viewModel.state.value.currentPage)
+            coVerify(exactly = 1) {
+                repository.searchStories(
+                    keyword = "tiên",
+                    completedOnly = true,
+                    page = 2,
+                    maleOnly = true,
+                    genreSlug = "tien-hiep",
+                )
+            }
+        }
+
+    @Test
+    fun `loadMoreFilterResults in browseByFilterOnly mode fetches next page of completedStories`() =
+        runTest {
+            activeSourceFlow.value = "wikidich"
+            val page1Story = sampleStory.copy(id = "wd.1", sourceId = "wikidich")
+            val page2Story = sampleStory.copy(id = "wd.2", sourceId = "wikidich")
+            coEvery { repository.getCompletedStories(page = 1, maleOnly = false) } returns listOf(page1Story)
+            coEvery { repository.getCompletedStories(page = 2, maleOnly = false) } returns listOf(page2Story)
+
+            viewModel = SearchViewModel(repository, searchHistoryRepository, authRepository)
+            advanceUntilIdle()
+
+            viewModel.applyAllFilters(
+                genre = null,
+                chapterFilter = ChapterCountFilter.NONE,
+                completedOnly = true,
+                maleOnly = false,
+            )
+            advanceUntilIdle()
+            assertEquals(1, viewModel.state.value.results.size)
+            assertTrue(viewModel.state.value.canLoadMore)
+
+            viewModel.loadMoreFilterResults()
+            advanceUntilIdle()
+
+            assertEquals(2, viewModel.state.value.results.size)
+            assertEquals(2, viewModel.state.value.currentPage)
+            coVerify(exactly = 1) { repository.getCompletedStories(page = 2, maleOnly = false) }
         }
 }

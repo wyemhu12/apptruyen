@@ -4,6 +4,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.rememberScrollState
@@ -25,6 +26,7 @@ import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.personal.apptruyen.BuildConfig
+import com.personal.apptruyen.ui.components.TextReplacementSummarySection
 import com.personal.apptruyen.ui.theme.*
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -284,106 +286,25 @@ fun SettingsScreen(
                         )
                         Spacer(modifier = Modifier.height(8.dp))
 
-                        if (state.customReplacements.isEmpty()) {
-                            Text(
-                                "Chưa có từ tùy chỉnh",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        } else {
-                            state.customReplacements.forEachIndexed { index, (from, to) ->
-                                Row(
-                                    modifier =
-                                        Modifier
-                                            .fillMaxWidth()
-                                            .padding(vertical = 4.dp),
-                                    horizontalArrangement = Arrangement.SpaceBetween,
-                                    verticalAlignment = Alignment.CenterVertically,
-                                ) {
-                                    Text(
-                                        "\"$from\" → \"$to\"",
-                                        style = MaterialTheme.typography.bodySmall,
-                                        modifier = Modifier.weight(1f),
-                                    )
-                                    IconButton(
-                                        onClick = { viewModel.removeCustomReplacement(index) },
-                                        modifier = Modifier.size(32.dp),
-                                    ) {
-                                        Icon(
-                                            Icons.Default.Delete,
-                                            contentDescription = "Xóa",
-                                            modifier = Modifier.size(18.dp),
-                                            tint = MaterialTheme.colorScheme.error,
-                                        )
-                                    }
-                                }
-                            }
-                        }
-
-                        Spacer(modifier = Modifier.height(8.dp))
-
-                        // Add new replacement
-                        var showAddDialog by remember { mutableStateOf(false) }
-                        OutlinedButton(
-                            onClick = { showAddDialog = true },
-                            modifier = Modifier.fillMaxWidth(),
-                            shape = RoundedCornerShape(12.dp),
-                        ) {
-                            Icon(
-                                Icons.Default.Add,
-                                contentDescription = null,
-                                modifier = Modifier.size(18.dp),
-                            )
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text("Thêm từ thay thế")
-                        }
-
-                        if (showAddDialog) {
-                            var fromText by remember { mutableStateOf("") }
-                            var toText by remember { mutableStateOf("") }
-
-                            AlertDialog(
-                                onDismissRequest = { showAddDialog = false },
-                                title = { Text("Thêm từ thay thế") },
-                                text = {
-                                    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                                        OutlinedTextField(
-                                            value = fromText,
-                                            onValueChange = { fromText = it },
-                                            label = { Text("Từ gốc") },
-                                            placeholder = { Text("vd: ch.ết") },
-                                            singleLine = true,
-                                            modifier = Modifier.fillMaxWidth(),
-                                        )
-                                        OutlinedTextField(
-                                            value = toText,
-                                            onValueChange = { toText = it },
-                                            label = { Text("Thay bằng") },
-                                            placeholder = { Text("vd: chết") },
-                                            singleLine = true,
-                                            modifier = Modifier.fillMaxWidth(),
-                                        )
-                                    }
-                                },
-                                confirmButton = {
-                                    TextButton(
-                                        onClick = {
-                                            if (fromText.isNotBlank()) {
-                                                viewModel.addCustomReplacement(fromText, toText)
-                                                showAddDialog = false
-                                            }
-                                        },
-                                    ) {
-                                        Text("Thêm")
-                                    }
-                                },
-                                dismissButton = {
-                                    TextButton(onClick = { showAddDialog = false }) {
-                                        Text("Hủy")
-                                    }
-                                },
-                            )
-                        }
+                        TextReplacementSummarySection(
+                            items = state.customReplacements,
+                            isGlobal = true,
+                            onAdd = { from, to, caseSensitive ->
+                                viewModel.addCustomReplacement(from, to, caseSensitive)
+                            },
+                            onUpdate = { index, expected, from, to, caseSensitive ->
+                                viewModel.updateCustomReplacement(
+                                    index = index,
+                                    from = from,
+                                    to = to,
+                                    caseSensitive = caseSensitive,
+                                    expected = expected,
+                                )
+                            },
+                            onRemove = { index, expected ->
+                                viewModel.removeCustomReplacement(index, expected)
+                            },
+                        )
                     }
                 }
             }
@@ -393,25 +314,25 @@ fun SettingsScreen(
                 SettingsSection(title = "Quản lý nguồn", icon = Icons.Default.Language) {
                     SettingsViewModel.ALL_SOURCES.forEach { sourceId ->
                         val label = SettingsViewModel.SOURCE_LABELS[sourceId] ?: sourceId
-                        val isEnabled = state.enabledSources.contains(sourceId)
+                        val isSelected = state.enabledSources.contains(sourceId)
                         Row(
                             modifier =
                                 Modifier
                                     .fillMaxWidth()
+                                    .clickable { viewModel.selectSource(sourceId) }
                                     .padding(horizontal = 20.dp, vertical = 6.dp),
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
                             Text(label, style = MaterialTheme.typography.bodyMedium)
-                            Switch(
-                                checked = isEnabled,
-                                onCheckedChange = { viewModel.toggleSource(sourceId) },
-                                enabled = !isEnabled || state.enabledSources.size > 1,
+                            RadioButton(
+                                selected = isSelected,
+                                onClick = { viewModel.selectSource(sourceId) },
                             )
                         }
                     }
                     Text(
-                        "Tắt nguồn không dùng để tăng tốc tìm kiếm",
+                        "Chọn 1 nguồn hoạt động cho Tìm kiếm và Khám phá (truyện trong Tủ truyện vẫn đọc/tải bình thường)",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp),
@@ -884,7 +805,7 @@ fun SettingsScreen(
                                 color = Color.White.copy(alpha = 0.85f),
                             )
                             Text(
-                                "Đa nguồn: Tàng Thư Viện • SsTruyện • Wikidich",
+                                "Đa nguồn: SsTruyện • Wikidich",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = Color.White.copy(alpha = 0.7f),
                             )

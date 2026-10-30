@@ -15,6 +15,7 @@ import com.personal.apptruyen.data.repository.BackupRepository
 import com.personal.apptruyen.data.repository.ISourceAuthRepository
 import com.personal.apptruyen.util.CrashHandler
 import com.personal.apptruyen.util.TextReplacementHelper
+import com.personal.apptruyen.util.TextReplacementItem
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.collections.immutable.ImmutableList
 import kotlinx.collections.immutable.persistentListOf
@@ -91,8 +92,8 @@ class SettingsViewModel
             val textReplacementEnabled: Boolean = true,
             val autoFormatEnabled: Boolean = true,
             val pokemonLookupEnabled: Boolean = true,
-            val customReplacements: ImmutableList<Pair<String, String>> = persistentListOf(),
-            val enabledSources: Set<String> = ALL_SOURCES,
+            val customReplacements: ImmutableList<TextReplacementItem> = persistentListOf(),
+            val enabledSources: Set<String> = setOf(SourceIds.DEFAULT_SINGLE_SOURCE),
             val prefetchChapters: Int = 0,
             val isWikidichLoggedIn: Boolean = false,
         )
@@ -143,17 +144,15 @@ class SettingsViewModel
                     pokemonLookupEnabled = prefs[SettingsKeys.POKEMON_LOOKUP_ENABLED] ?: true,
                     customReplacements =
                         TextReplacementHelper
-                            .parseCustomReplacements(
+                            .parseReplacementItems(
                                 prefs[SettingsKeys.CUSTOM_REPLACEMENTS],
                             ).toImmutableList(),
                     enabledSources =
-                        prefs[SettingsKeys.ENABLED_SOURCES]
-                            ?.split(",")
-                            ?.filter { it.isNotBlank() }
-                            ?.toSet()
-                            ?.intersect(ALL_SOURCES)
-                            ?.ifEmpty { ALL_SOURCES }
-                            ?: ALL_SOURCES,
+                        setOf(
+                            SourceIds.resolveSingleSource(
+                                prefs[SettingsKeys.ENABLED_SOURCES],
+                            ),
+                        ),
                     prefetchChapters = prefs.getIntSafe(SettingsKeys.PREFETCH_CHAPTERS, 0),
                     isWikidichLoggedIn = isWikidichLoggedIn,
                 )
@@ -222,50 +221,79 @@ class SettingsViewModel
         fun addCustomReplacement(
             from: String,
             to: String,
+            caseSensitive: Boolean = false,
         ) {
+            if (from.isBlank()) return
             viewModelScope.launch {
-                val current = state.value.customReplacements.toMutableList()
-                current.add(from to to)
-                val json = TextReplacementHelper.serializeCustomReplacements(current)
-                dataStore.edit { it[SettingsKeys.CUSTOM_REPLACEMENTS] = json }
+                dataStore.edit { prefs ->
+                    val current =
+                        TextReplacementHelper
+                            .parseReplacementItems(
+                                prefs[SettingsKeys.CUSTOM_REPLACEMENTS],
+                            ).toMutableList()
+                    current.add(TextReplacementItem(from = from, to = to, caseSensitive = caseSensitive))
+                    val json = TextReplacementHelper.serializeReplacementItems(current)
+                    prefs[SettingsKeys.CUSTOM_REPLACEMENTS] = json
+                }
             }
         }
 
-        fun removeCustomReplacement(index: Int) {
+        fun updateCustomReplacement(
+            index: Int,
+            from: String,
+            to: String,
+            caseSensitive: Boolean,
+            expected: TextReplacementItem? = null,
+        ) {
+            if (from.isBlank()) return
             viewModelScope.launch {
-                val current = state.value.customReplacements.toMutableList()
-                if (index in current.indices) {
-                    current.removeAt(index)
-                    val json = TextReplacementHelper.serializeCustomReplacements(current)
-                    dataStore.edit { it[SettingsKeys.CUSTOM_REPLACEMENTS] = json }
+                dataStore.edit { prefs ->
+                    val current =
+                        TextReplacementHelper
+                            .parseReplacementItems(
+                                prefs[SettingsKeys.CUSTOM_REPLACEMENTS],
+                            ).toMutableList()
+                    if (index in current.indices && (expected == null || current[index] == expected)) {
+                        current[index] = TextReplacementItem(from = from, to = to, caseSensitive = caseSensitive)
+                        val json = TextReplacementHelper.serializeReplacementItems(current)
+                        prefs[SettingsKeys.CUSTOM_REPLACEMENTS] = json
+                    }
+                }
+            }
+        }
+
+        fun removeCustomReplacement(
+            index: Int,
+            expected: TextReplacementItem? = null,
+        ) {
+            viewModelScope.launch {
+                dataStore.edit { prefs ->
+                    val current =
+                        TextReplacementHelper
+                            .parseReplacementItems(
+                                prefs[SettingsKeys.CUSTOM_REPLACEMENTS],
+                            ).toMutableList()
+                    if (index in current.indices && (expected == null || current[index] == expected)) {
+                        current.removeAt(index)
+                        val json = TextReplacementHelper.serializeReplacementItems(current)
+                        prefs[SettingsKeys.CUSTOM_REPLACEMENTS] = json
+                    }
+                }
+            }
+        }
+
+        fun selectSource(sourceId: String) {
+            if (sourceId !in ALL_SOURCES) return
+            viewModelScope.launch {
+                dataStore.edit { prefs ->
+                    prefs[SettingsKeys.ENABLED_SOURCES] = sourceId
+                    prefs[SettingsKeys.IS_WIKIDICH_MIGRATED] = true
                 }
             }
         }
 
         fun toggleSource(sourceId: String) {
-            viewModelScope.launch {
-                dataStore.edit { prefs ->
-                    val current =
-                        (
-                            prefs[SettingsKeys.ENABLED_SOURCES]
-                                ?.split(",")
-                                ?.filter { it.isNotBlank() }
-                                ?.toSet()
-                                ?.intersect(ALL_SOURCES)
-                                ?.ifEmpty { ALL_SOURCES }
-                                ?: state.value.enabledSources
-                                    .intersect(ALL_SOURCES)
-                                    .ifEmpty { ALL_SOURCES }
-                        ).toMutableSet()
-                    if (current.contains(sourceId)) {
-                        // Không cho tắt nguồn cuối cùng
-                        if (current.size > 1) current.remove(sourceId)
-                    } else if (sourceId in ALL_SOURCES) {
-                        current.add(sourceId)
-                    }
-                    prefs[SettingsKeys.ENABLED_SOURCES] = current.joinToString(",")
-                }
-            }
+            selectSource(sourceId)
         }
 
         fun setPrefetchChapters(count: Int) {

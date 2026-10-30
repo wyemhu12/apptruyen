@@ -426,10 +426,25 @@ fun ReaderScreen(
                 onLineSpacingChange = { viewModel.onIntent(ReaderIntent.SetLineSpacing(it)) },
                 onFontFamilyChange = { viewModel.onIntent(ReaderIntent.SetFontFamily(it)) },
                 onToggleStoryReplacements = { viewModel.onIntent(ReaderIntent.ToggleStoryReplacements) },
-                onAddStoryReplacement = { from, to -> viewModel.onIntent(ReaderIntent.AddStoryReplacement(from, to)) },
-                onRemoveStoryReplacement = { index -> viewModel.onIntent(ReaderIntent.RemoveStoryReplacement(index)) },
-                onSendToGlobal = { from, to ->
-                    viewModel.onIntent(ReaderIntent.SendReplacementToGlobal(from, to))
+                onAddStoryReplacement = { from, to, caseSensitive ->
+                    viewModel.onIntent(ReaderIntent.AddStoryReplacement(from, to, caseSensitive))
+                },
+                onUpdateStoryReplacement = { index, expected, from, to, caseSensitive ->
+                    viewModel.onIntent(
+                        ReaderIntent.UpdateStoryReplacement(
+                            index = index,
+                            from = from,
+                            to = to,
+                            caseSensitive = caseSensitive,
+                            expected = expected,
+                        ),
+                    )
+                },
+                onRemoveStoryReplacement = { index, expected ->
+                    viewModel.onIntent(ReaderIntent.RemoveStoryReplacement(index, expected))
+                },
+                onSendToGlobal = { from, to, caseSensitive ->
+                    viewModel.onIntent(ReaderIntent.SendReplacementToGlobal(from, to, caseSensitive))
                 },
                 onToggleAutoScroll = { viewModel.onIntent(ReaderIntent.ToggleAutoScroll) },
                 onSetAutoScrollSpeed = { viewModel.onIntent(ReaderIntent.SetAutoScrollSpeed(it)) },

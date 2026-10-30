@@ -172,6 +172,7 @@ class TextReplacementHelperTest {
 
     // ═══════ serializeCustomReplacements ═══════
 
+    @Suppress("DEPRECATION")
     @Test
     fun `serializeCustomReplacements roundtrip`() {
         val original = listOf("nàn" to "nàng", "chàg" to "chàng")
@@ -180,17 +181,110 @@ class TextReplacementHelperTest {
         assertEquals(original, parsed)
     }
 
+    @Suppress("DEPRECATION")
     @Test
     fun `serializeCustomReplacements empty list`() {
         val json = TextReplacementHelper.serializeCustomReplacements(emptyList())
         assertEquals("[]", json)
     }
 
+    @Suppress("DEPRECATION")
     @Test
     fun `serializeCustomReplacements preserves special chars`() {
         val original = listOf("\"quoted\"" to "'single'", "line\nnewline" to "flat")
         val json = TextReplacementHelper.serializeCustomReplacements(original)
         val parsed = TextReplacementHelper.parseCustomReplacements(json)
         assertEquals(original, parsed)
+    }
+
+    // ═══════ TextReplacementItem & caseSensitive (TC-1 -> TC-5) ═══════
+
+    @Test
+    fun `applyReplacementItems when caseSensitive is false replaces all case variants`() {
+        val items =
+            listOf(
+                TextReplacementItem(from = "Mây tía", to = "Tử Vân", caseSensitive = false),
+            )
+        val result =
+            TextReplacementHelper.applyReplacementItems(
+                text = "Mây tía bay qua, mây tía rực rỡ, MÂY TÍA trên trời",
+                enabled = true,
+                customReplacements = items,
+            )
+        assertEquals("Tử Vân bay qua, Tử Vân rực rỡ, Tử Vân trên trời", result)
+    }
+
+    @Test
+    fun `applyReplacementItems when caseSensitive is true replaces only exact case match`() {
+        val items =
+            listOf(
+                TextReplacementItem(from = "Mây tía", to = "Tử Vân", caseSensitive = true),
+            )
+        val result =
+            TextReplacementHelper.applyReplacementItems(
+                text = "Mây tía bay qua, mây tía rực rỡ, MÂY TÍA trên trời",
+                enabled = true,
+                customReplacements = items,
+            )
+        assertEquals("Tử Vân bay qua, mây tía rực rỡ, MÂY TÍA trên trời", result)
+    }
+
+    @Test
+    fun `applyAllReplacementItems combines global and story with independent caseSensitive flags`() {
+        val result =
+            TextReplacementHelper.applyAllReplacementItems(
+                text = "tu liên cùng Tu Liên",
+                globalEnabled = true,
+                globalCustomReplacements =
+                    listOf(
+                        TextReplacementItem(from = "tu liên", to = "Tu Tiên", caseSensitive = false),
+                    ),
+                storyEnabled = true,
+                storyCustomReplacements =
+                    listOf(
+                        TextReplacementItem(from = "Tu Tiên", to = "Đạo Tổ", caseSensitive = true),
+                    ),
+            )
+        assertEquals("Đạo Tổ cùng Đạo Tổ", result)
+    }
+
+    @Test
+    fun `parseReplacementItems defaults missing caseSensitive in legacy JSON to false and roundtrips new JSON`() {
+        val legacyJson = """[{"from":"nàn","to":"nàng"}]"""
+        val legacyParsed = TextReplacementHelper.parseReplacementItems(legacyJson)
+        assertEquals(1, legacyParsed.size)
+        assertEquals(TextReplacementItem("nàn", "nàng", caseSensitive = false), legacyParsed[0])
+
+        val appliedOnLegacy =
+            TextReplacementHelper.applyReplacementItems(
+                text = "Nàn nhìn nàn",
+                enabled = true,
+                customReplacements = legacyParsed,
+            )
+        assertEquals("nàng nhìn nàng", appliedOnLegacy)
+
+        val items =
+            listOf(
+                TextReplacementItem("abc", "xyz", caseSensitive = false),
+                TextReplacementItem("Mây tía", "Tử Vân", caseSensitive = true),
+            )
+        val serialized = TextReplacementHelper.serializeReplacementItems(items)
+        val roundtripped = TextReplacementHelper.parseReplacementItems(serialized)
+        assertEquals(items, roundtripped)
+    }
+
+    @Test
+    fun `applyReplacementItems skips blank from item`() {
+        val items =
+            listOf(
+                TextReplacementItem(from = "   ", to = "Tử Vân", caseSensitive = false),
+            )
+        val result =
+            TextReplacementHelper.applyReplacementItems(
+                text = "Mây tía",
+                enabled = true,
+                customReplacements = items,
+            )
+        assertEquals("Mây tía", result)
     }
 }

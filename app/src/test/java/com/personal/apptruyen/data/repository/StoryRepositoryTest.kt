@@ -3,9 +3,11 @@ package com.personal.apptruyen.data.repository
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.emptyPreferences
+import androidx.datastore.preferences.core.preferencesOf
 import com.personal.apptruyen.data.local.ChapterDao
 import com.personal.apptruyen.data.local.DatabaseTransactionRunner
 import com.personal.apptruyen.data.local.ReadingProgressDao
+import com.personal.apptruyen.data.local.SettingsKeys
 import com.personal.apptruyen.data.local.StoryDao
 import com.personal.apptruyen.data.local.entity.ChapterEntity
 import com.personal.apptruyen.data.local.entity.StoryEntity
@@ -20,7 +22,9 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.toList
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.TestScope
+import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.runTest
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.*
@@ -186,12 +190,6 @@ class StoryRepositoryTest {
     @Test
     fun `getStoryDetail does not collide across sources sharing the same raw slug`() =
         runTest {
-            val ttvSource = mockk<StorySource>()
-            every { ttvSource.sourceId } returns "tangthuvien"
-            every { ttvSource.sourceName } returns "Tàng Thư Viện"
-            every { ttvSource.baseUrl } returns "https://truyen.tangthuvien.vn"
-            every { ttvSource.legacyHosts } returns emptyList()
-
             val ssSource = mockk<StorySource>()
             every { ssSource.sourceId } returns "sstruyen"
             every { ssSource.sourceName } returns "SsTruyện"
@@ -200,7 +198,7 @@ class StoryRepositoryTest {
 
             val repo =
                 StoryRepository(
-                    setOf(ttvSource, ssSource),
+                    setOf(ssSource),
                     storyDao,
                     chapterDao,
                     testScope,
@@ -219,9 +217,32 @@ class StoryRepositoryTest {
                     url = "https://truyen.tangthuvien.vn/doc-truyen/pham-nhan-tu-tien",
                     sourceId = "tangthuvien",
                 )
+            // Prefixed TangThuVien story cached offline with composite ID "tangthuvien_tien-nghich"
+            val prefixedTtvEntity =
+                StoryEntity(
+                    id = "tangthuvien_tien-nghich",
+                    slug = "tien-nghich",
+                    title = "Tiên Nghịch (TTV Offline)",
+                    url = "https://tangthuvien.org/doc-truyen/tien-nghich",
+                    sourceId = "tangthuvien",
+                )
+            // Legacy SsTruyen story cached with raw slug "cung-slug"
+            val legacySsEntity =
+                StoryEntity(
+                    id = "cung-slug",
+                    slug = "cung-slug",
+                    title = "Cùng Slug (SsTruyện)",
+                    url = "https://sstruyen.pics/truyen/cung-slug",
+                    sourceId = "sstruyen",
+                )
             coEvery { storyDao.getStoryByUrl(any()) } returns null
             coEvery { storyDao.getStoryById("sstruyen_pham-nhan-tu-tien") } returns null
             coEvery { storyDao.getStoryById("pham-nhan-tu-tien") } returns legacyTtvEntity
+            coEvery { storyDao.getStoryById("tangthuvien_tien-nghich") } returns prefixedTtvEntity
+            coEvery { storyDao.getStoryById("tangthuvien_cung-slug") } returns null
+            coEvery { storyDao.getStoryById("cung-slug") } returns legacySsEntity
+            coEvery { storyDao.getStoryById("truyencom_tien-nghich") } returns null
+            coEvery { storyDao.getStoryById("tien-nghich") } returns null
 
             val ssStory =
                 Story(
@@ -235,11 +256,30 @@ class StoryRepositoryTest {
             val insertedSlot = slot<StoryEntity>()
             coEvery { storyDao.insertStory(capture(insertedSlot)) } just Runs
 
-            // Opening SsTruyen URL with same slug must NOT return TTV's cached entity or overwrite it
+            // 1. Opening SsTruyen URL with same slug must NOT return TTV's cached entity or overwrite it
             val result = repo.getStoryDetail("https://sstruyen.pics/truyen/pham-nhan-tu-tien")
             assertEquals("sstruyen_pham-nhan-tu-tien", result.id)
             assertEquals("sstruyen", result.sourceId)
             assertEquals("sstruyen_pham-nhan-tu-tien", insertedSlot.captured.id)
+
+            // 2. Opening deprecated TangThuVien URL resolves composite ID "tangthuvien_tien-nghich" offline
+            val offlineTtv = repo.getStoryDetail("https://tangthuvien.org/doc-truyen/tien-nghich")
+            assertEquals("tangthuvien_tien-nghich", offlineTtv.id)
+            assertEquals("tangthuvien", offlineTtv.sourceId)
+
+            // 3. Opening deprecated TangThuVien URL must NOT return legacy SsTruyen entity sharing the same rawSlug
+            assertThrows(ScraperException.ParseException::class.java) {
+                kotlinx.coroutines.test.runTest {
+                    repo.getStoryDetail("https://tangthuvien.org/doc-truyen/cung-slug")
+                }
+            }
+
+            // 4. Opening another deprecated host (truyencom.com) with same slug must NOT return TTV's entity
+            assertThrows(ScraperException.ParseException::class.java) {
+                kotlinx.coroutines.test.runTest {
+                    repo.getStoryDetail("https://truyencom.com/truyen/tien-nghich")
+                }
+            }
         }
 
     // ----- searchStories -----
@@ -902,5 +942,207 @@ class StoryRepositoryTest {
 
             assertEquals(485, savedSlot.captured.totalChapters)
             coVerify { storyDao.updateTotalChaptersIfGreater("wikidich_vol", 485) }
+        }
+
+    @Test
+    fun `getCompletedStories forwards maleOnly to every active source`() =
+        runTest {
+            every { dataStore.data } returns flowOf(preferencesOf(SettingsKeys.ENABLED_SOURCES to "wikidich"))
+            val wikiSource = mockk<StorySource>()
+            every { wikiSource.sourceId } returns "wikidich"
+            every { wikiSource.sourceName } returns "Wikidich"
+            every { wikiSource.baseUrl } returns "https://wikicv.org"
+            every { wikiSource.legacyHosts } returns emptyList()
+
+            val sampleStory =
+                Story(
+                    id = "wikidich_1",
+                    slug = "story-1",
+                    title = "Truyện Nam",
+                    author = "Tác Giả",
+                    url = "https://wikicv.org/truyen/story-1",
+                    sourceId = "wikidich",
+                )
+            coEvery { source.getCompletedStories(any(), false) } returns emptyList()
+            coEvery { wikiSource.getCompletedStories(1, false) } returns listOf(sampleStory)
+
+            val repo =
+                StoryRepository(
+                    setOf(source, wikiSource),
+                    storyDao,
+                    chapterDao,
+                    testScope,
+                    dataStore,
+                    ScraperCircuitBreaker(),
+                    authRepository,
+                    transactionRunner,
+                )
+
+            val result = repo.getCompletedStories(page = 1, maleOnly = false)
+            assertEquals(1, result.size)
+            coVerify { wikiSource.getCompletedStories(1, false) }
+            coVerify(exactly = 0) { source.getCompletedStories(1, false) }
+        }
+
+    @Test
+    fun `getStoriesByGenre forwards maleOnly to every active source`() =
+        runTest {
+            every { dataStore.data } returns flowOf(preferencesOf(SettingsKeys.ENABLED_SOURCES to "wikidich"))
+            val wikiSource = mockk<StorySource>()
+            every { wikiSource.sourceId } returns "wikidich"
+            every { wikiSource.sourceName } returns "Wikidich"
+            every { wikiSource.baseUrl } returns "https://wikicv.org"
+            every { wikiSource.legacyHosts } returns emptyList()
+
+            val sampleStory =
+                Story(
+                    id = "wikidich_2",
+                    slug = "story-2",
+                    title = "Truyện Tiên Hiệp",
+                    author = "Tác Giả",
+                    url = "https://wikicv.org/truyen/story-2",
+                    sourceId = "wikidich",
+                )
+            coEvery { source.getStoriesByGenre("tien-hiep", any(), 0, true, false) } returns emptyList()
+            coEvery { wikiSource.getStoriesByGenre("tien-hiep", 1, 0, true, false) } returns listOf(sampleStory)
+
+            val repo =
+                StoryRepository(
+                    setOf(source, wikiSource),
+                    storyDao,
+                    chapterDao,
+                    testScope,
+                    dataStore,
+                    ScraperCircuitBreaker(),
+                    authRepository,
+                    transactionRunner,
+                )
+
+            val result =
+                repo.getStoriesByGenre(
+                    genreSlug = "tien-hiep",
+                    page = 1,
+                    minChapters = 0,
+                    completedOnly = true,
+                    maleOnly = false,
+                )
+            assertEquals(1, result.size)
+            coVerify { wikiSource.getStoriesByGenre("tien-hiep", 1, 0, true, false) }
+            coVerify(exactly = 0) { source.getStoriesByGenre("tien-hiep", 1, 0, true, false) }
+        }
+
+    @Test
+    fun `observeActiveSource and setActiveSource persist and emit single active source`() =
+        runTest {
+            val prefsFlow = kotlinx.coroutines.flow.MutableStateFlow<Preferences>(preferencesOf())
+            every { dataStore.data } returns prefsFlow
+            coEvery { dataStore.updateData(any()) } coAnswers {
+                val transform = firstArg<suspend (Preferences) -> Preferences>()
+                val updated = transform(prefsFlow.value)
+                prefsFlow.value = updated
+                updated
+            }
+
+            val sstSource = mockk<StorySource>()
+            every { sstSource.sourceId } returns "sstruyen"
+            every { sstSource.sourceName } returns "SsTruyện"
+            every { sstSource.baseUrl } returns "https://sstruyen.pics"
+            every { sstSource.legacyHosts } returns emptyList()
+
+            val wikiSource = mockk<StorySource>()
+            every { wikiSource.sourceId } returns "wikidich"
+            every { wikiSource.sourceName } returns "Wikidich"
+            every { wikiSource.baseUrl } returns "https://wikicv.org"
+            every { wikiSource.legacyHosts } returns emptyList()
+
+            val repo =
+                StoryRepository(
+                    setOf(sstSource, wikiSource),
+                    storyDao,
+                    chapterDao,
+                    testScope,
+                    dataStore,
+                    ScraperCircuitBreaker(),
+                    authRepository,
+                    transactionRunner,
+                )
+
+            val emitted = mutableListOf<String>()
+            val collectJob =
+                backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) {
+                    repo.observeActiveSource().collect { emitted.add(it) }
+                }
+
+            repo.setActiveSource("tangthuvien") // Deprecated source must be ignored
+            repo.setActiveSource("wikidich")
+            repo.setActiveSource("sstruyen")
+            collectJob.cancel()
+
+            assertEquals(listOf("sstruyen", "wikidich", "sstruyen"), emitted)
+
+            coEvery { sstSource.search("kiếm", false) } returns emptyList()
+            repo.searchStories("kiếm", completedOnly = false)
+            coVerify(exactly = 1) { sstSource.search("kiếm", false) }
+            coVerify(exactly = 0) { wikiSource.search(any(), any()) }
+            coVerify(exactly = 0) { wikiSource.search(any(), any(), any(), any(), any()) }
+
+            // Test 5-arg search forwarding on wikidich
+            repo.setActiveSource("wikidich")
+            coEvery { wikiSource.search("tiên", true, 2, true, "tien-hiep") } returns emptyList()
+            repo.searchStories("tiên", completedOnly = true, page = 2, maleOnly = true, genreSlug = "tien-hiep")
+            coVerify(exactly = 1) { wikiSource.search("tiên", true, 2, true, "tien-hiep") }
+            coVerify(exactly = 0) { sstSource.search("tiên", any()) }
+        }
+
+    @Test
+    fun `TC4 - upgradeToHttps removes o query parameter on wikicv photo URLs while preserving other params and hosts`() {
+        assertEquals(
+            "https://wikicv.org/photo/6adf3c8e54b8083581ec61a4",
+            upgradeToHttps("https://wikicv.org/photo/6adf3c8e54b8083581ec61a4?o=1"),
+        )
+        assertEquals(
+            "https://wikicv.org/photo/123?a=1",
+            upgradeToHttps("http://wikicv.org/photo/123?a=1&o=1"),
+        )
+        assertEquals(
+            "https://wikicv.org/photo/123?w=200",
+            upgradeToHttps("https://wikicv.org/photo/123?o=1&w=200"),
+        )
+        assertEquals(
+            "https://other.com/photo/123?o=1",
+            upgradeToHttps("https://other.com/photo/123?o=1"),
+        )
+    }
+
+    @Test
+    fun `TC5 - getStoryDetail non-cached branch returns resolvedStory with merged safeCoverUrl from existingEntity`() =
+        runTest {
+            val existingEntity =
+                StoryEntity(
+                    id = "truyencom_story-cover",
+                    slug = "story-cover",
+                    title = "Truyện Có Ảnh",
+                    author = "Tác giả",
+                    url = "https://truyencom.com/old-url/",
+                    coverImageUrl = "https://wikicv.org/photo/123?o=1",
+                    sourceId = "truyencom",
+                )
+            coEvery { storyDao.getStoryByUrl("https://truyencom.com/story-cover/") } returns null
+            coEvery { storyDao.getStoryById("truyencom_story-cover") } returnsMany listOf(null, existingEntity)
+            coEvery { chapterDao.getChapterCount("truyencom_story-cover") } returns 10
+            coEvery { source.getStoryDetail("https://truyencom.com/story-cover/") } returns
+                Story(
+                    id = "truyencom_story-cover",
+                    slug = "story-cover",
+                    title = "Truyện Có Ảnh",
+                    author = "Tác giả",
+                    url = "https://truyencom.com/story-cover/",
+                    coverImageUrl = "",
+                    totalChapters = 10,
+                    sourceId = "truyencom",
+                )
+
+            val result = storyRepository.getStoryDetail("https://truyencom.com/story-cover/")
+            assertEquals("https://wikicv.org/photo/123", result.coverImageUrl)
         }
 }

@@ -339,4 +339,133 @@ class StoryDetailViewModelTest {
                 Dispatchers.resetMain()
             }
         }
+
+    @Test
+    fun `downloadChapters and downloadAll sort undownloaded chapters ascending by chapterNumber`() =
+        runTest {
+            val testDispatcher = UnconfinedTestDispatcher(testScheduler)
+            Dispatchers.setMain(testDispatcher)
+            mockkObject(Screen.StoryDetail)
+            mockkObject(DownloadService.Companion)
+            try {
+                every { Screen.StoryDetail.decodeUrl(any()) } answers { firstArg() }
+                every { DownloadService.startDownload(any(), any(), any(), any()) } returns true
+                val repo = mockk<IStoryRepository>(relaxed = true)
+                val textRepo = mockk<ITextReplacementRepository>(relaxed = true)
+                val progressRepo = mockk<IReadingProgressRepository>(relaxed = true)
+                val notifHelper = mockk<DownloadNotificationHelper>(relaxed = true)
+                val app = mockk<Application>(relaxed = true)
+
+                val sampleStory =
+                    Story(
+                        id = "story-1",
+                        slug = "story-1",
+                        title = "Truyện Kiểm Thử",
+                        url = "https://sstruyen.pics/truyen/story-1",
+                        totalChapters = 5,
+                    )
+                val unorderedChapters =
+                    listOf(
+                        Chapter("story-1", 5, "Chương 5", "https://sstruyen.pics/c5", isDownloaded = false),
+                        Chapter("story-1", 1, "Chương 1", "https://sstruyen.pics/c1", isDownloaded = true),
+                        Chapter("story-1", 2, "Chương 2", "https://sstruyen.pics/c2", isDownloaded = false),
+                        Chapter("story-1", 3, "Chương 3", "https://sstruyen.pics/c3", isDownloaded = true),
+                    )
+                coEvery { repo.getStoryDetail(any()) } returns sampleStory
+                coEvery { repo.getFirstPageChapterList(any(), any()) } returns (unorderedChapters to 1)
+                coEvery { textRepo.getStoryReplacements("story-1") } returns StoryReplacementData(false, "[]")
+                every { repo.observeChapters("story-1") } returns kotlinx.coroutines.flow.flowOf(unorderedChapters)
+                every { progressRepo.observeReadingProgress(any()) } returns emptyFlow()
+                every { repo.observeStory(any()) } returns emptyFlow()
+
+                val vm =
+                    StoryDetailViewModel(
+                        savedStateHandle = SavedStateHandle(mapOf("storyId" to "story-1", "storyUrl" to sampleStory.url)),
+                        repository = repo,
+                        textReplacementRepository = textRepo,
+                        readingProgressRepository = progressRepo,
+                        notificationHelper = notifHelper,
+                        application = app,
+                    )
+                advanceUntilIdle()
+
+                vm.downloadChapters(1)
+                advanceUntilIdle()
+
+                verify(exactly = 1) {
+                    DownloadService.startDownload(
+                        any(),
+                        eq("story-1"),
+                        any(),
+                        match { it.contentEquals(intArrayOf(2)) },
+                    )
+                }
+
+                vm.downloadAll()
+                advanceUntilIdle()
+
+                verify(exactly = 1) {
+                    DownloadService.startDownload(
+                        any(),
+                        eq("story-1"),
+                        any(),
+                        match { it.contentEquals(intArrayOf(2, 5)) },
+                    )
+                }
+            } finally {
+                unmockkObject(DownloadService.Companion)
+                unmockkObject(Screen.StoryDetail)
+                Dispatchers.resetMain()
+            }
+        }
+
+    @Test
+    fun `loadStoryDetail catches exception thrown inside async getFirstPageChapterList without crashing parent coroutine`() =
+        runTest {
+            val testDispatcher = UnconfinedTestDispatcher(testScheduler)
+            Dispatchers.setMain(testDispatcher)
+            mockkObject(Screen.StoryDetail)
+            try {
+                every { Screen.StoryDetail.decodeUrl(any()) } answers { firstArg() }
+                val repo = mockk<IStoryRepository>(relaxed = true)
+                val textRepo = mockk<ITextReplacementRepository>(relaxed = true)
+                val progressRepo = mockk<IReadingProgressRepository>(relaxed = true)
+                val notifHelper = mockk<DownloadNotificationHelper>(relaxed = true)
+                val app = mockk<Application>(relaxed = true)
+
+                val sampleStory =
+                    Story(
+                        id = "wikidich_test",
+                        slug = "test",
+                        title = "Truyện Wikidich",
+                        url = "https://wikicv.org/truyen/test",
+                        totalChapters = 100,
+                    )
+                coEvery { repo.getStoryDetail(any()) } returns sampleStory
+                coEvery { repo.getFirstPageChapterList(any(), any()) } throws Exception("Không có kết nối mạng và chưa có dữ liệu cache")
+                every { repo.observeChapters(any()) } returns emptyFlow()
+                every { progressRepo.observeReadingProgress(any()) } returns emptyFlow()
+                every { repo.observeStory(any()) } returns emptyFlow()
+
+                val vm =
+                    StoryDetailViewModel(
+                        savedStateHandle = SavedStateHandle(mapOf("storyId" to "wikidich_test", "storyUrl" to sampleStory.url)),
+                        repository = repo,
+                        textReplacementRepository = textRepo,
+                        readingProgressRepository = progressRepo,
+                        notificationHelper = notifHelper,
+                        application = app,
+                    )
+                advanceUntilIdle()
+
+                assertFalse(vm.state.value.isLoading)
+                assertEquals(
+                    "Không thể tải thông tin truyện. Vui lòng kiểm tra mạng và thử lại.",
+                    vm.state.value.error,
+                )
+            } finally {
+                unmockkObject(Screen.StoryDetail)
+                Dispatchers.resetMain()
+            }
+        }
 }

@@ -23,15 +23,30 @@ object SourceIds {
     const val SSTRUYEN = "sstruyen"
     const val WIKIDICH = "wikidich"
 
-    val ALL_ACTIVE_SOURCES = setOf(TANGTHUVIEN, SSTRUYEN, WIKIDICH)
-    val DEPRECATED_SOURCES = setOf("truyencom", "truyenfull")
+    const val DEFAULT_SINGLE_SOURCE = SSTRUYEN
+    val ORDERED_SOURCES: List<String> = listOf(SSTRUYEN, WIKIDICH)
+
+    val ALL_ACTIVE_SOURCES = setOf(SSTRUYEN, WIKIDICH)
+    val DEPRECATED_SOURCES = setOf("truyencom", "truyenfull", TANGTHUVIEN)
 
     val SOURCE_LABELS: Map<String, String> =
         mapOf(
-            TANGTHUVIEN to "TàngThưViện",
             SSTRUYEN to "SsTruyện",
             WIKIDICH to "Wikidich",
         )
+
+    /**
+     * Normalizes any stored CSV string into a single valid source ID.
+     * Picks the first valid source present in [rawCsv], or falls back to [DEFAULT_SINGLE_SOURCE].
+     */
+    fun resolveSingleSource(rawCsv: String?): String {
+        if (rawCsv.isNullOrBlank()) return DEFAULT_SINGLE_SOURCE
+        return rawCsv
+            .split(",")
+            .map { it.trim() }
+            .firstOrNull { it in ALL_ACTIVE_SOURCES }
+            ?: DEFAULT_SINGLE_SOURCE
+    }
 }
 
 object SettingsKeys {
@@ -66,7 +81,7 @@ object SettingsKeys {
     /** Font chữ đọc truyện: 0=NotoSerif, 1=Roboto, 2=BeVietnamPro, 3=System */
     val FONT_FAMILY = intPreferencesKey("font_family")
 
-    /** Danh sách nguồn truyện bật, lưu dạng CSV: "tangthuvien,sstruyen,wikidich" */
+    /** Nguồn truyện đang hoạt động, lưu dạng ID đơn: "sstruyen" hoặc "wikidich" */
     val ENABLED_SOURCES = stringPreferencesKey("enabled_sources")
 
     /** Cờ đánh dấu đã di chuyển sang nguồn Wikidich (chỉ chạy 1 lần cho user cũ) */
@@ -105,8 +120,11 @@ object SettingsKeys {
             -> {
                 rawValue.toBooleanStrictOrNull()?.let { prefs[booleanPreferencesKey(key)] = it }
             }
-            CUSTOM_REPLACEMENTS.name, TTS_VOICE.name, ENABLED_SOURCES.name -> {
+            CUSTOM_REPLACEMENTS.name, TTS_VOICE.name -> {
                 prefs[stringPreferencesKey(key)] = rawValue
+            }
+            ENABLED_SOURCES.name -> {
+                prefs[ENABLED_SOURCES] = SourceIds.resolveSingleSource(rawValue)
             }
         }
     }
@@ -157,26 +175,23 @@ suspend fun DataStore<Preferences>.healCorruptedIntPreferences() {
 }
 
 /**
- * Migration nguồn truyện một lần duy nhất sang Wikidich, loại bỏ TruyenCom & TruyenFull.
+ * Migration nguồn truyện về đúng 1 nguồn hoạt động duy nhất, loại bỏ TruyenCom & TruyenFull.
  */
 suspend fun DataStore<Preferences>.migrateWikidichEnabledSourcesIfNeeded() {
-    val isMigrated = data.first()[SettingsKeys.IS_WIKIDICH_MIGRATED] ?: false
-    if (isMigrated) return
+    val snapshot = data.first()
+    val isMigrated = snapshot[SettingsKeys.IS_WIKIDICH_MIGRATED] ?: false
+    val currentRaw = snapshot[SettingsKeys.ENABLED_SOURCES]
+    if (isMigrated &&
+        currentRaw != null &&
+        !currentRaw.contains(",") &&
+        currentRaw.trim() in SourceIds.ALL_ACTIVE_SOURCES
+    ) {
+        return
+    }
 
     edit { preferences ->
-        if (preferences[SettingsKeys.IS_WIKIDICH_MIGRATED] == true) return@edit
-        val currentSources =
-            preferences[SettingsKeys.ENABLED_SOURCES]
-                ?.split(",")
-                ?.map { it.trim() }
-                ?.filter { it.isNotEmpty() }
-                ?.toMutableSet()
-                ?: SourceIds.ALL_ACTIVE_SOURCES.toMutableSet()
-
-        currentSources.removeAll(SourceIds.DEPRECATED_SOURCES)
-        currentSources.add("wikidich")
-
-        preferences[SettingsKeys.ENABLED_SOURCES] = currentSources.joinToString(",")
+        val rawInside = preferences[SettingsKeys.ENABLED_SOURCES]
+        preferences[SettingsKeys.ENABLED_SOURCES] = SourceIds.resolveSingleSource(rawInside)
         preferences[SettingsKeys.IS_WIKIDICH_MIGRATED] = true
     }
 }

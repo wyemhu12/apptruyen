@@ -184,7 +184,7 @@ class WikidichScraperTest {
             val html = loadFixture("search_logged_in.html")
             server.enqueue(MockResponse(code = 200, body = html))
 
-            val stories = scraper.getCompletedStories(1)
+            val stories = scraper.getCompletedStories(1, maleOnly = true)
             assertTrue(stories.isNotEmpty())
             assertEquals("wikidich", stories.first().sourceId)
         }
@@ -192,7 +192,7 @@ class WikidichScraperTest {
     @Test
     fun `getStoriesByGenre with unknown genre returns empty list without network call`() =
         runTest {
-            val stories = scraper.getStoriesByGenre("genre-khong-ton-tai", 1, 0, false)
+            val stories = scraper.getStoriesByGenre("genre-khong-ton-tai", 1, 0, false, maleOnly = true)
             assertTrue(stories.isEmpty())
             assertEquals(0, server.requestCount)
         }
@@ -208,7 +208,7 @@ class WikidichScraperTest {
     }
 
     @Test
-    fun `getStoriesByGenre uses filter form qs=1 params while search uses q and qs=1`() =
+    fun `getStoriesByGenre uses filter form qs=2 params with newest sort and male filter`() =
         runTest {
             val listHtml = loadFixture("search_logged_in.html")
             val detailHtml =
@@ -236,18 +236,23 @@ class WikidichScraperTest {
                     }
                 }
 
-            val page1Stories = scraper.getStoriesByGenre("gioi-giai-tri", 1, 0, true)
+            val page1Stories = scraper.getStoriesByGenre("lam-su-nghiep", 1, 0, completedOnly = true, maleOnly = true)
             assertTrue(page1Stories.isNotEmpty())
-            assertTrue(requestedPaths.first().contains("qs=1"))
+            assertTrue(requestedPaths.first().contains("qs=2"))
+            assertTrue(requestedPaths.first().contains("gender=5794f03dd7ced228f4419196"))
             assertTrue(requestedPaths.first().contains("status=5794f03dd7ced228f4419191"))
-            assertTrue(requestedPaths.first().contains("tag=5794f03ed7ced228f44191de"))
-            assertTrue(requestedPaths.first().contains("tc=&tf=0"))
+            assertTrue(requestedPaths.first().contains("genre=6785c24e23deea36d63efe8e"))
+            assertTrue(requestedPaths.first().contains("so=4&vo=1"))
+            assertFalse(requestedPaths.first().contains("qs=1"))
+            assertFalse(requestedPaths.first().contains("tc=&tf=0"))
             assertEquals("Hoàn thành", page1Stories.first().status)
 
             requestedPaths.clear()
-            scraper.getStoriesByGenre("hien-dai", 2, 0, true)
-            assertTrue(requestedPaths.first().contains("qs=1"))
-            assertTrue(requestedPaths.first().contains("age=5794f03dd7ced228f441919d"))
+            scraper.getStoriesByGenre("quan-su", 2, 0, completedOnly = true, maleOnly = true)
+            assertTrue(requestedPaths.first().contains("qs=2"))
+            assertTrue(requestedPaths.first().contains("gender=5794f03dd7ced228f4419196"))
+            assertTrue(requestedPaths.first().contains("genre=6785b91d23deea36d63efe7f"))
+            assertTrue(requestedPaths.first().contains("so=4&vo=1"))
             assertTrue(requestedPaths.first().contains("start=20"))
 
             requestedPaths.clear()
@@ -256,6 +261,88 @@ class WikidichScraperTest {
             assertTrue(searchStories.isNotEmpty())
             assertTrue(requestedPaths.first().contains("/tim-kiem?q=hogwarts&qs=1"))
             assertEquals(245, searchStories.first().totalChapters)
+        }
+
+    @Test
+    fun `getStoriesByGenre without male filter omits gender param`() =
+        runTest {
+            val html = loadFixture("search_logged_in.html")
+            server.enqueue(MockResponse(code = 200, body = html))
+
+            val stories = scraper.getStoriesByGenre("xay-dung", 1, 0, completedOnly = true, maleOnly = false)
+            assertTrue(stories.isNotEmpty())
+
+            val recorded = server.takeRequest()
+            val urlStr = recorded.url.toString()
+            assertTrue(urlStr.contains("/tim-kiem?qs=2"))
+            assertTrue(urlStr.contains("genre=5fd3abb623deea0a1a87e9b5"))
+            assertTrue(urlStr.contains("status=5794f03dd7ced228f4419191"))
+            assertTrue(urlStr.contains("so=4&vo=1"))
+            assertFalse(urlStr.contains("gender="))
+        }
+
+    @Test
+    fun `getCompletedStories with maleOnly calls tim kiem with newest sort`() =
+        runTest {
+            val html = loadFixture("search_logged_in.html")
+            server.enqueue(MockResponse(code = 200, body = html))
+
+            val stories = scraper.getCompletedStories(page = 1, maleOnly = true)
+            assertTrue(stories.isNotEmpty())
+            assertEquals("Hoàn thành", stories.first().status)
+
+            val recorded = server.takeRequest()
+            val urlStr = recorded.url.toString()
+            assertTrue(urlStr.contains("/tim-kiem?qs=2"))
+            assertTrue(urlStr.contains("gender=5794f03dd7ced228f4419196"))
+            assertTrue(urlStr.contains("status=5794f03dd7ced228f4419191"))
+            assertTrue(urlStr.contains("so=4&vo=1"))
+        }
+
+    @Test
+    fun `getCompletedStories without maleOnly calls bang xep hang fast path`() =
+        runTest {
+            val html = loadFixture("search_logged_in.html")
+            server.enqueue(MockResponse(code = 200, body = html))
+
+            val stories = scraper.getCompletedStories(page = 2, maleOnly = false)
+            assertTrue(stories.isNotEmpty())
+            assertEquals("Hoàn thành", stories.first().status)
+            assertEquals(1, server.requestCount)
+
+            val recorded = server.takeRequest()
+            val urlStr = recorded.url.toString()
+            assertTrue(urlStr.contains("/bang-xep-hang?so=5&start=20"))
+            assertFalse(urlStr.contains("gender="))
+        }
+
+    @Test
+    fun `getCompletedStories fallback to tim kiem when bang xep hang is empty`() =
+        runTest {
+            val emptyHtml = "<html><body><div class='book-list'></div></body></html>"
+            val validHtml = loadFixture("search_logged_in.html")
+            server.enqueue(MockResponse(code = 200, body = emptyHtml))
+            server.enqueue(MockResponse(code = 200, body = validHtml))
+
+            val stories = scraper.getCompletedStories(page = 1, maleOnly = false)
+            assertTrue(stories.isNotEmpty())
+            assertEquals(2, server.requestCount)
+
+            val firstRequest = server.takeRequest().url.toString()
+            val secondRequest = server.takeRequest().url.toString()
+            assertTrue(firstRequest.contains("/bang-xep-hang?so=5"))
+            assertTrue(secondRequest.contains("/tim-kiem?qs=2&status=5794f03dd7ced228f4419191&so=4&vo=1"))
+            assertFalse(secondRequest.contains("gender="))
+        }
+
+    @Test
+    fun `getGenreList does not contain removed gender tags`() =
+        runTest {
+            val genres = scraper.getGenreList()
+            val removedSlugs = setOf("truyen-nam", "ngon-tinh", "dam-my", "bach-hop")
+            assertEquals(19, genres.size)
+            assertTrue(genres.none { it.slug in removedSlugs })
+            assertTrue(WikidichScraper.GENRE_QUERY_MAP.keys.none { it in removedSlugs })
         }
 
     @Test
@@ -602,5 +689,211 @@ class WikidichScraperTest {
             val docWithoutParams = org.jsoup.Jsoup.parse("<html><body><div class='cover-info'><h2>Test</h2></div></body></html>")
             val count = scraper.fetchTotalChaptersFromBookIndex(docWithoutParams, server.url("/truyen/no-params").toString())
             assertEquals(0, count)
+        }
+
+    @Test
+    fun `TC1 - getStoryDetail extracts cover from book-info cover-wrapper and strips o query parameter`() =
+        runTest {
+            val html = loadFixture("story_detail.html")
+            server.enqueue(MockResponse(code = 200, body = html))
+
+            val story = scraper.getStoryDetail(server.url("/truyen/sample").toString())
+            assertTrue(story.coverImageUrl.endsWith("/photo/6a950ea654b8087c7d7c833d"))
+            assertFalse(story.coverImageUrl.contains("?o="))
+            assertFalse(story.coverImageUrl.contains("&o="))
+        }
+
+    @Test
+    fun `TC2 and TC3 - extractCoverUrl filters default placeholders and falls back to data-src when src is svg data URI`() {
+        val defaultCoverImg =
+            org.jsoup.Jsoup
+                .parse("""<img src="/static/img/default-cover.jpg" data-src=""/>""")
+                .selectFirst("img")
+        assertEquals("", scraper.extractCoverUrl(defaultCoverImg))
+
+        val svgOnlyImg =
+            org.jsoup.Jsoup
+                .parse("""<img src="data:image/svg+xml;base64,PHN2Zz4=" data-src=""/>""")
+                .selectFirst("img")
+        assertEquals("", scraper.extractCoverUrl(svgOnlyImg))
+
+        val lazyDataSrcImg =
+            org.jsoup.Jsoup
+                .parse("""<img src="data:image/svg+xml;base64,PHN2Zz4=" data-src="/photo/123?o=1"/>""")
+                .selectFirst("img")
+        val extracted = scraper.extractCoverUrl(lazyDataSrcImg)
+        assertTrue(extracted.endsWith("/photo/123"))
+        assertFalse(extracted.contains("?o="))
+    }
+
+    @Test
+    fun `getGenreList returns 19 canonical Loai hinh genres and GENRE_QUERY_MAP maps every slug to 24-hex genre ObjectId matching fixture links`() =
+        runTest {
+            val genres = scraper.getGenreList()
+            assertEquals(19, genres.size)
+            assertEquals(19, WikidichScraper.GENRE_QUERY_MAP.size)
+            assertEquals(genres.map { it.slug }.toSet(), WikidichScraper.GENRE_QUERY_MAP.keys)
+
+            val objectIdRegex = Regex("^genre=[0-9a-f]{24}$")
+            WikidichScraper.GENRE_QUERY_MAP.values.forEach { param ->
+                assertTrue(objectIdRegex.matches(param), "Expected 24-hex genre ObjectId, got: $param")
+            }
+
+            // Cross-check against real fixtures in repo
+            val detailDoc = org.jsoup.Jsoup.parse(loadFixture("story_detail.html"))
+            val mangaHref = detailDoc.selectFirst("a[href*='genre=5794f03dd7ced228f44191a8']")?.attr("href").orEmpty()
+            assertTrue(mangaHref.contains(WikidichScraper.GENRE_QUERY_MAP.getValue("manga-anime")))
+
+            val searchDoc = org.jsoup.Jsoup.parse(loadFixture("search_logged_in.html"))
+            val searchHtml = searchDoc.html()
+            assertTrue(searchHtml.contains(WikidichScraper.GENRE_QUERY_MAP.getValue("huyen-huyen")))
+            assertTrue(searchHtml.contains(WikidichScraper.GENRE_QUERY_MAP.getValue("vo-hiep")))
+            assertTrue(searchHtml.contains(WikidichScraper.GENRE_QUERY_MAP.getValue("tien-hiep")))
+            assertTrue(searchHtml.contains(WikidichScraper.GENRE_QUERY_MAP.getValue("trinh-tham")))
+            assertTrue(searchHtml.contains(WikidichScraper.GENRE_QUERY_MAP.getValue("kinh-di")))
+
+            // Removed legacy slugs return emptyList() without making HTTP requests
+            val removedLegacySlugs = listOf("gioi-giai-tri", "hien-dai", "he-thong", "oe", "vong-du")
+            for (removed in removedLegacySlugs) {
+                val res = scraper.getStoriesByGenre(removed, 1, 0, completedOnly = true, maleOnly = true)
+                assertTrue(res.isEmpty())
+            }
+            assertEquals(0, server.requestCount)
+        }
+
+    @Test
+    fun `search with 5 params throws LoginRequiredException when response contains login wall`() =
+        runTest {
+            val loginHtml = loadFixture("search_not_logged_in.html")
+            server.enqueue(MockResponse(code = 200, body = loginHtml))
+
+            assertThrows(ScraperException.LoginRequiredException::class.java) {
+                kotlinx.coroutines.runBlocking {
+                    scraper.search(
+                        keyword = "tiên",
+                        completedOnly = true,
+                        page = 1,
+                        maleOnly = true,
+                        genreSlug = "tien-hiep",
+                    )
+                }
+            }
+        }
+
+    @Test
+    fun `search builds server-side URL with qs 1 genre gender status keyword and start pagination`() =
+        runTest {
+            val html =
+                loadFixture("search_logged_in.html")
+                    .replace("Còn tiếp", "Hoàn thành")
+                    .replace("Ngôn tình", "Nam sinh")
+            server.enqueue(MockResponse(code = 200, body = html))
+
+            val stories =
+                scraper.search(
+                    keyword = "hệ thống",
+                    completedOnly = true,
+                    page = 2,
+                    maleOnly = true,
+                    genreSlug = "tien-hiep",
+                )
+            assertTrue(stories.isNotEmpty())
+
+            val recorded = server.takeRequest()
+            assertEquals(
+                "/tim-kiem?q=h%E1%BB%87+th%E1%BB%91ng&qs=1&genre=5794f03dd7ced228f44191a4&gender=5794f03dd7ced228f4419196&status=5794f03dd7ced228f4419191&start=20",
+                recorded.url.encodedPath + "?" + recorded.url.encodedQuery,
+            )
+        }
+
+    @Test
+    fun `search filters out all 7 non-male Wikidich gender labels when maleOnly is true`() =
+        runTest {
+            val genders =
+                listOf(
+                    "nam-sinh-1" to ("Truyện Nam Sinh" to "Nam sinh"),
+                    "ngon-tinh-2" to ("Truyện Ngôn Tình" to "Ngôn tình"),
+                    "dam-my-3" to ("Truyện Đam Mỹ" to "Đam mỹ"),
+                    "bach-hop-4" to ("Truyện Bách Hợp" to "Bách hợp"),
+                    "nu-tan-5" to ("Truyện Nữ Tần" to "Nữ tần"),
+                    "nu-ton-6" to ("Truyện Nữ Tôn" to "Nữ tôn"),
+                    "khong-cp-7" to ("Truyện Không CP" to "Không CP"),
+                    "da-nguyen-8" to ("Truyện Đa Nguyên" to "Đa nguyên"),
+                )
+            val itemsHtml =
+                genders.joinToString("\n") { (slug, pair) ->
+                    val (title, genderLabel) = pair
+                    """
+                    <div class="book-item">
+                        <div class="info-col">
+                            <a class="tooltipped" href="/truyen/$slug">
+                                <h5 class="book-title truncate">$title</h5>
+                            </a>
+                            <p class="book-author"><a href="/tac-gia/tg">Tác giả</a></p>
+                            <p class="book-gender">$genderLabel</p>
+                            <p class="book-publisher"><a href="/tim-kiem?status=5794f03dd7ced228f4419191">Hoàn thành</a></p>
+                        </div>
+                    </div>
+                    """.trimIndent()
+                }
+            val html = "<html><body><div class=\"book-list\">$itemsHtml</div></body></html>"
+            server.enqueue(MockResponse(code = 200, body = html))
+            server.enqueue(MockResponse(code = 200, body = html))
+
+            val maleFiltered =
+                scraper.search(
+                    keyword = "truyện",
+                    completedOnly = true,
+                    page = 1,
+                    maleOnly = true,
+                    genreSlug = null,
+                )
+            assertEquals(1, maleFiltered.size)
+            assertEquals("Truyện Nam Sinh", maleFiltered.first().title)
+
+            val allStories =
+                scraper.search(
+                    keyword = "truyện",
+                    completedOnly = true,
+                    page = 1,
+                    maleOnly = false,
+                    genreSlug = null,
+                )
+            assertEquals(8, allStories.size)
+        }
+
+    @Test
+    fun `getFirstPageChapters extracts dynamic pageSize 501 from loadBookIndex script when present`() =
+        runTest {
+            val storyHtml =
+                loadFixture("story_detail.html")
+                    .replace("loadBookIndex(0, 99, false)", "loadBookIndex(0, 501, false)")
+            val ajaxHtml =
+                """
+                <ul class="pagination">
+                  <li class="active"><a href="#!" data-start="0" data-size="501" data-action="loadBookIndex">1</a></li>
+                  <li class="waves-effect"><a href="#!" data-start="501" data-size="501" data-action="loadBookIndex">2</a></li>
+                </ul>
+                <ul>
+                  <li class="chapter-name"><a href="/truyen/sample/c-1">Chương 1</a></li>
+                </ul>
+                """.trimIndent()
+
+            var requestedQuery = ""
+            server.dispatcher =
+                object : Dispatcher() {
+                    override fun dispatch(request: RecordedRequest): MockResponse =
+                        if (request.url.encodedPath.contains("/book/index")) {
+                            requestedQuery = request.url.encodedQuery.orEmpty()
+                            MockResponse(code = 200, body = ajaxHtml)
+                        } else {
+                            MockResponse(code = 200, body = storyHtml)
+                        }
+                }
+
+            val result = scraper.getFirstPageChapters(server.url("/truyen/sample").toString())
+            assertTrue(requestedQuery.contains("size=501"), "Expected size=501 in query, got: $requestedQuery")
+            assertEquals(2, result.totalPages)
+            assertEquals(1, result.chapters.size)
         }
 }

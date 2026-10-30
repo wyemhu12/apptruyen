@@ -321,7 +321,7 @@ class SsTruyenScraperTest {
                 """.trimIndent()
             server.enqueue(MockResponse(code = 200, body = html))
 
-            val stories = scraper.getCompletedStories(1)
+            val stories = scraper.getCompletedStories(1, maleOnly = true)
             assertEquals(1, stories.size)
             assertEquals("Hoàn thành", stories.first().status)
 
@@ -348,7 +348,7 @@ class SsTruyenScraperTest {
                 """.trimIndent()
             server.enqueue(MockResponse(code = 200, body = html))
 
-            val stories = scraper.getStoriesByGenre("tien-hiep", 1, minChapters = 500, completedOnly = true)
+            val stories = scraper.getStoriesByGenre("tien-hiep", 1, minChapters = 500, completedOnly = true, maleOnly = true)
             assertEquals(1, stories.size)
 
             val recorded = server.takeRequest()
@@ -589,4 +589,30 @@ class SsTruyenScraperTest {
             scraper.normalizeCoverUrl("http://localhost:8080/cover.jpg"),
         )
     }
+
+    @Test
+    fun `search skips non-story hasPart category links on homepage`() =
+        runTest {
+            val html =
+                """
+                <html>
+                <body>
+                    <a itemProp="hasPart" href="/the-loai/huyen-huyen">
+                        <p itemProp="name">Tiên Hiệp &amp; Huyền Huyễn</p>
+                    </a>
+                    <a itemProp="hasPart" href="/truyen/linh-vu-thien-ha">
+                        <p itemProp="name">Linh Vũ Thiên Hạ</p>
+                        <div itemProp="author"><span itemProp="name">Vũ Phong</span></div>
+                        <span itemProp="bookFormat">Đã hoàn thành</span>
+                    </a>
+                </body>
+                </html>
+                """.trimIndent()
+            server.enqueue(MockResponse(code = 200, body = html))
+
+            val stories = scraper.search("linh vu", completedOnly = false)
+            assertEquals(1, stories.size)
+            assertEquals("sstruyen_linh-vu-thien-ha", stories.first().id)
+            assertEquals("Linh Vũ Thiên Hạ", stories.first().title)
+        }
 }

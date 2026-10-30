@@ -2,6 +2,7 @@ package com.personal.apptruyen.ui.explore
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.personal.apptruyen.data.local.SourceIds
 import com.personal.apptruyen.data.model.Genre
 import com.personal.apptruyen.data.model.Story
 import com.personal.apptruyen.data.remote.ScraperException
@@ -17,9 +18,11 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import timber.log.Timber
 import javax.inject.Inject
 
 @HiltViewModel
@@ -34,18 +37,21 @@ class ExploreViewModel
             val stories: ImmutableList<Story> = persistentListOf(),
             val genres: ImmutableList<Genre> = persistentListOf(),
             val selectedGenre: Genre? = null,
+            val maleOnly: Boolean = true,
             val isLoading: Boolean = false,
             val isLoadingMore: Boolean = false,
             val isRefreshing: Boolean = false,
             val error: String? = null,
             val currentPage: Int = 1,
             val canLoadMore: Boolean = true,
+            val activeSource: String = SourceIds.DEFAULT_SINGLE_SOURCE,
         )
 
         private val _state = MutableStateFlow(ExploreState())
         val state: StateFlow<ExploreState> = _state.asStateFlow()
         private var loadJob: Job? = null
         private var loadMoreJob: Job? = null
+        private var lastObservedSource: String? = null
 
         val loginRequiredSources: StateFlow<Set<String>> =
             authRepository.loginRequiredSources
@@ -58,6 +64,49 @@ class ExploreViewModel
         init {
             loadGenres()
             loadFirstPage()
+            observeActiveSourceChanges()
+        }
+
+        private fun observeActiveSourceChanges() {
+            viewModelScope.launch {
+                repository.observeActiveSource().collectLatest { sourceId ->
+                    val previous = lastObservedSource
+                    lastObservedSource = sourceId
+                    _state.update { it.copy(activeSource = sourceId) }
+                    if (previous != null && previous != sourceId) {
+                        handleActiveSourceSwitched()
+                    }
+                }
+            }
+        }
+
+        private suspend fun handleActiveSourceSwitched() {
+            val newGenres =
+                try {
+                    repository.getGenreList().toImmutableList()
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    Timber.e(e, "Failed to reload genres after source switch")
+                    persistentListOf()
+                }
+            val currentGenre = _state.value.selectedGenre
+            val validGenre = currentGenre?.takeIf { g -> newGenres.any { it.slug == g.slug } }
+            _state.update {
+                it.copy(
+                    genres = newGenres,
+                    selectedGenre = validGenre,
+                    error = null,
+                )
+            }
+            loadFirstPage()
+        }
+
+        fun selectSource(sourceId: String) {
+            if (sourceId !in SourceIds.ALL_ACTIVE_SOURCES || sourceId == _state.value.activeSource) return
+            viewModelScope.launch {
+                repository.setActiveSource(sourceId)
+            }
         }
 
         private fun loadGenres() {
@@ -78,19 +127,33 @@ class ExploreViewModel
             loadFirstPage()
         }
 
+        fun toggleMaleOnly() {
+            _state.update { it.copy(maleOnly = !it.maleOnly) }
+            loadFirstPage()
+        }
+
         fun loadFirstPage() {
             loadJob?.cancel()
             loadMoreJob?.cancel()
             loadJob =
                 viewModelScope.launch {
                     val genre = _state.value.selectedGenre
+                    val maleOnly = _state.value.maleOnly
                     _state.update { it.copy(isLoading = true, stories = persistentListOf(), error = null) }
                     try {
                         val stories =
                             if (genre != null) {
-                                repository.getStoriesByGenre(genre.slug, page = 1, completedOnly = true)
+                                repository.getStoriesByGenre(
+                                    genre.slug,
+                                    page = 1,
+                                    completedOnly = true,
+                                    maleOnly = maleOnly,
+                                )
                             } else {
-                                repository.getCompletedStories(page = 1)
+                                repository.getCompletedStories(
+                                    page = 1,
+                                    maleOnly = maleOnly,
+                                )
                             }
                         _state.update {
                             it.copy(
@@ -121,12 +184,21 @@ class ExploreViewModel
                     _state.update { it.copy(isLoadingMore = true) }
                     try {
                         val genre = _state.value.selectedGenre
+                        val maleOnly = _state.value.maleOnly
                         val nextPage = _state.value.currentPage + 1
                         val moreStories =
                             if (genre != null) {
-                                repository.getStoriesByGenre(genre.slug, page = nextPage, completedOnly = true)
+                                repository.getStoriesByGenre(
+                                    genre.slug,
+                                    page = nextPage,
+                                    completedOnly = true,
+                                    maleOnly = maleOnly,
+                                )
                             } else {
-                                repository.getCompletedStories(page = nextPage)
+                                repository.getCompletedStories(
+                                    page = nextPage,
+                                    maleOnly = maleOnly,
+                                )
                             }
                         _state.update {
                             val merged = deduplicateStories(it.stories + moreStories)
@@ -163,11 +235,20 @@ class ExploreViewModel
                     _state.update { it.copy(isRefreshing = true, error = null) }
                     try {
                         val genre = _state.value.selectedGenre
+                        val maleOnly = _state.value.maleOnly
                         val stories =
                             if (genre != null) {
-                                repository.getStoriesByGenre(genre.slug, page = 1, completedOnly = true)
+                                repository.getStoriesByGenre(
+                                    genre.slug,
+                                    page = 1,
+                                    completedOnly = true,
+                                    maleOnly = maleOnly,
+                                )
                             } else {
-                                repository.getCompletedStories(page = 1)
+                                repository.getCompletedStories(
+                                    page = 1,
+                                    maleOnly = maleOnly,
+                                )
                             }
                         _state.update {
                             it.copy(

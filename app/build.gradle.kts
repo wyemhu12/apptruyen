@@ -14,7 +14,7 @@ import java.io.FileInputStream
 // Load signing properties
 val keystoreProperties = Properties().apply {
     val propsFile = rootProject.file("keystore.properties")
-    if (propsFile.exists()) load(FileInputStream(propsFile))
+    if (propsFile.exists()) propsFile.inputStream().use { load(it) }
 }
 
 android {
@@ -25,8 +25,8 @@ android {
         applicationId = "com.personal.apptruyen"
         minSdk = 26
         targetSdk = 36
-        versionCode = 52
-        versionName = "3.0.4"
+        versionCode = 56
+        versionName = "3.0.8"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {

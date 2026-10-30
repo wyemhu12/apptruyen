@@ -11,13 +11,17 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.jsoup.Jsoup
 import org.jsoup.nodes.Document
+import org.jsoup.nodes.Element
 import timber.log.Timber
 import java.net.URLEncoder
 import java.security.MessageDigest
+import java.text.Normalizer
+import java.util.Locale
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -52,13 +56,16 @@ class WikidichScraper
             private const val DEFAULT_PAGE_SIZE = 99
             private const val MAX_PAGINATION_PAGES = 200
             private const val SEARCH_PAGE_SIZE = 20
+            private const val MALE_GENDER_PARAM = "gender=5794f03dd7ced228f4419196"
+            private const val COMPLETED_STATUS_PARAM = "status=5794f03dd7ced228f4419191"
+            private const val NEWEST_SORT_PARAM = "so=4&vo=1"
             private const val ENRICH_MAX_ITEMS = 5
             private const val ENRICH_BATCH_SIZE = 2
             private const val ENRICH_TIMEOUT_MS = 3_500L
             private const val MAX_PAGINATION_JUMPS = 2
             private const val MAX_AJAX_CACHE_SIZE = 30
             private const val AJAX_CACHE_TTL_MS = 10 * 60 * 1000L
-            private const val DESKTOP_UA =
+            internal const val DESKTOP_UA =
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
 
             private val WATERMARK_REGEX = Regex("【❁.*\\(Wikidich\\).*❁】", RegexOption.IGNORE_CASE)
@@ -73,54 +80,38 @@ class WikidichScraper
                     RegexOption.IGNORE_CASE,
                 )
 
-            val GENRE_QUERY_MAP =
+            internal val NON_MALE_WIKIDICH_GENDERS =
+                setOf(
+                    "ngôn tình",
+                    "đam mỹ",
+                    "bách hợp",
+                    "nữ tần",
+                    "nữ tôn",
+                    "không cp",
+                    "đa nguyên",
+                )
+
+            internal val GENRE_QUERY_MAP =
                 mapOf(
-                    "tien-hiep" to "tag=5794f03dd7ced228f44191ad&genre=5794f03dd7ced228f44191a4",
+                    "tinh-cam" to "genre=5794f03dd7ced228f44191a2",
+                    "lam-su-nghiep" to "genre=6785c24e23deea36d63efe8e",
+                    "tien-hiep" to "genre=5794f03dd7ced228f44191a4",
                     "huyen-huyen" to "genre=57d17c94d7ced218fcd2734b",
+                    "khoa-hoc-vien-tuong" to "genre=5794f03dd7ced228f44191a9",
+                    "mat-the" to "genre=5794f03dd7ced228f44191ac",
+                    "sinh-ton" to "genre=5fd54e6523deea0a1a87e9b9",
+                    "tranh-ba" to "genre=5a1ce8f512fb556782b06f7e",
                     "vo-hiep" to "genre=5794f03dd7ced228f44191a3",
-                    "xuyen-khong" to "tag=5794f03dd7ced228f44191af",
-                    "xuyen-viet" to "tag=5794f03dd7ced228f44191af",
-                    "trong-sinh" to "tag=5794f03dd7ced228f44191b4",
-                    "ngon-tinh" to "gender=5794f03dd7ced228f4419195",
-                    "dam-my" to "gender=5794f03dd7ced228f4419197",
-                    "bach-hop" to "gender=5794f03dd7ced228f4419198",
-                    "truyen-nam" to "gender=5794f03dd7ced228f4419196",
-                    "do-thi" to "age=5794f03dd7ced228f441919d",
-                    "hien-dai" to "age=5794f03dd7ced228f441919d",
-                    "co-dai" to "age=5794f03dd7ced228f441919b",
-                    "tuong-lai" to "age=5794f03dd7ced228f441919e&tag=5794f03dd7ced228f44191c6",
-                    "vong-du" to "genre=5794f03dd7ced228f44191a5",
-                    "mat-the" to "tag=5794f03dd7ced228f44191ac",
-                    "khoa-huyen" to "age=5794f03dd7ced228f441919e&tag=5794f03dd7ced228f44191c6",
-                    "ma-phap" to "tag=5794f03dd7ced228f44191b0",
-                    "dien-van" to "tag=5794f03dd7ced228f44191c0",
-                    "lam-ruong" to "tag=5794f03dd7ced228f44191c0",
-                    "my-thuc" to "tag=5794f03dd7ced228f44191c5",
-                    "khong-gian" to "tag=5794f03dd7ced228f44191bb",
-                    "trach-dau" to "tag=5794f03ed7ced228f44191dc",
-                    "cung-dau" to "tag=5794f03dd7ced228f44191d7",
-                    "trinh-tham" to "tag=5794f03dd7ced228f44191c1&genre=5794f03dd7ced228f44191a7",
+                    "trinh-tham" to "genre=5794f03dd7ced228f44191a7",
                     "kinh-di" to "genre=5794f03dd7ced228f44191a6",
-                    "linh-di" to "genre=5794f03dd7ced228f44191a6",
-                    "he-thong" to "tag=5794f03dd7ced228f44191b6",
-                    "gioi-giai-tri" to "tag=5794f03ed7ced228f44191de",
-                    "giai-tri" to "tag=5794f03ed7ced228f44191de",
-                    "sinh-con" to "tag=5794f03dd7ced228f44191c2",
-                    "chu-cong" to "tag=5794f03dd7ced228f44191cc",
-                    "dong-nhan" to "official=5794f03dd7ced228f4419194",
-                    "dien-sinh" to "official=5794f03dd7ced228f4419194",
-                    "hai-huoc" to "tag=58458dc3d7ced23af03679d9",
-                    "nhe-nhang" to "tag=58458dc3d7ced23af03679cf",
-                    "chua-lanh" to "tag=6032781123deea60925a9f2e",
-                    "doan-sung" to "tag=603277ea23deea60925a9f2d",
-                    "sung" to "tag=5794f03dd7ced228f44191b5",
-                    "ngot-sung" to "tag=5794f03dd7ced228f44191b5",
-                    "van-nhan-me" to "tag=6046549323deea4c3dfee6b4",
-                    "he" to "ending=5794f03dd7ced228f441919f",
-                    "be" to "ending=5794f03dd7ced228f44191a1",
-                    "oe" to "ending=5794f03dd7ced228f44191a2",
-                    "di-nang" to "tag=5794f03dd7ced228f44191b2",
-                    "di-gioi" to "tag=5794f03dd7ced228f44191b1",
+                    "quan-truong" to "genre=5b10edd012fb550d90428316",
+                    "kinh-thuong" to "genre=5794f03dd7ced228f44191d4",
+                    "quan-su" to "genre=6785b91d23deea36d63efe7f",
+                    "xay-dung" to "genre=5fd3abb623deea0a1a87e9b5",
+                    "lam-ruong" to "genre=5794f03dd7ced228f44191c0",
+                    "huyen-hoc" to "genre=58458dc2d7ced23af03679c5",
+                    "phim-anh" to "genre=596bd83012fb557cb030fc5a",
+                    "manga-anime" to "genre=5794f03dd7ced228f44191a8",
                 )
         }
 
@@ -128,21 +119,70 @@ class WikidichScraper
             keyword: String,
             completedOnly: Boolean,
         ): List<Story> =
+            search(
+                keyword = keyword,
+                completedOnly = completedOnly,
+                page = 1,
+                maleOnly = false,
+                genreSlug = null,
+            )
+
+        override suspend fun search(
+            keyword: String,
+            completedOnly: Boolean,
+            page: Int,
+            maleOnly: Boolean,
+            genreSlug: String?,
+        ): List<Story> =
             withContext(Dispatchers.IO) {
-                val encoded = URLEncoder.encode(keyword, "UTF-8")
-                // Chế độ 1 trên wikicv.org: Tìm kiếm theo từ khóa (?q=<keyword>&qs=1)
-                val url = "$baseUrl/tim-kiem?q=$encoded&qs=1"
+                val trimmedKeyword = keyword.trim()
+                if (trimmedKeyword.isBlank()) return@withContext emptyList()
+                val filterParam =
+                    if (!genreSlug.isNullOrBlank()) {
+                        GENRE_QUERY_MAP[genreSlug] ?: return@withContext emptyList()
+                    } else {
+                        null
+                    }
+                val encoded = URLEncoder.encode(trimmedKeyword, "UTF-8")
+                val genreParam = if (filterParam != null) "&$filterParam" else ""
+                val genderParam = if (maleOnly) "&$MALE_GENDER_PARAM" else ""
+                val statusParam = if (completedOnly) "&$COMPLETED_STATUS_PARAM" else ""
+                val start = (page.coerceAtLeast(1) - 1) * SEARCH_PAGE_SIZE
+                val startParam = if (start > 0) "&start=$start" else ""
+                val url = "$baseUrl/tim-kiem?q=$encoded&qs=1$genreParam$genderParam$statusParam$startParam"
                 val doc = fetchDocumentWithRetry(url)
                 checkLoginRequired(doc)
                 val stories = parseStoryList(doc)
-                val filtered =
-                    if (completedOnly) {
-                        stories.filter { it.status.contains("Hoàn thành", ignoreCase = true) }.ifEmpty { stories }
-                    } else {
-                        stories
-                    }
+                val filtered = filterStories(stories, completedOnly = completedOnly, maleOnly = maleOnly)
                 enrichWithChapterCounts(filtered, maxItems = ENRICH_MAX_ITEMS)
             }
+
+        internal fun filterStories(
+            stories: List<Story>,
+            completedOnly: Boolean,
+            maleOnly: Boolean,
+        ): List<Story> {
+            var result = stories
+            if (completedOnly) {
+                result =
+                    result.filter { story ->
+                        story.status.contains("Hoàn thành", ignoreCase = true) ||
+                            story.status.contains("Full", ignoreCase = true)
+                    }
+            }
+            if (maleOnly) {
+                result =
+                    result.filter { story ->
+                        story.genres.none { rawGender ->
+                            val normalized =
+                                Normalizer
+                                    .normalize(rawGender.trim().lowercase(Locale.ROOT), Normalizer.Form.NFC)
+                            normalized in NON_MALE_WIKIDICH_GENDERS
+                        }
+                    }
+            }
+            return result
+        }
 
         override suspend fun getStoryDetail(storyUrl: String): Story =
             withContext(Dispatchers.IO) {
@@ -155,8 +195,8 @@ class WikidichScraper
 
                 val author = doc.selectFirst(".cover-info a[href*='/tac-gia/']")?.text()?.trim() ?: "Chưa rõ"
 
-                val coverImg = doc.selectFirst(".cover-info img, .book-info img")
-                val coverUrl = coverImg?.attr("src")?.let { fixUrl(it) } ?: ""
+                val coverImg = doc.selectFirst(".book-info .cover-wrapper img, .cover-info img, .book-info img")
+                val coverUrl = extractCoverUrl(coverImg)
 
                 val descElement = doc.selectFirst(".book-desc-detail, .book-desc")
                 val description =
@@ -214,9 +254,11 @@ class WikidichScraper
                 val doc = fetchDocumentWithRetry(storyUrl)
                 checkLoginRequired(doc)
 
-                val (bookId, cut, signKey) = extractSecurityParams(doc.html(), storyUrl)
-                val sign = makeBookIndexSign(signKey, 0, DEFAULT_PAGE_SIZE, cut)
-                val indexUrl = "$baseUrl/book/index?bookId=$bookId&start=0&size=$DEFAULT_PAGE_SIZE&signKey=$signKey&sign=$sign"
+                val html = doc.html()
+                val (bookId, cut, signKey) = extractSecurityParams(html, storyUrl)
+                val pageSize = extractPageSize(html)
+                val sign = makeBookIndexSign(signKey, 0, pageSize, cut)
+                val indexUrl = "$baseUrl/book/index?bookId=$bookId&start=0&size=$pageSize&signKey=$signKey&sign=$sign"
 
                 val fragmentHtml = fetchAjaxFragment(indexUrl, storyUrl)
                 val fragmentDoc = Jsoup.parseBodyFragment(fragmentHtml)
@@ -236,7 +278,7 @@ class WikidichScraper
                     paginationLinks
                         .mapNotNull { it.text().trim().toIntOrNull() }
                         .maxOrNull() ?: 1
-                val totalPages = maxOf((maxStart / DEFAULT_PAGE_SIZE) + 1, maxPageFromText)
+                val totalPages = maxOf((maxStart / pageSize) + 1, maxPageFromText)
 
                 StorySource.FirstPageResult(
                     chapters = chapters,
@@ -252,14 +294,16 @@ class WikidichScraper
             val doc = fetchDocumentWithRetry(storyUrl)
             checkLoginRequired(doc)
 
-            val (bookId, cut, signKey) = extractSecurityParams(doc.html(), storyUrl)
+            val html = doc.html()
+            val (bookId, cut, signKey) = extractSecurityParams(html, storyUrl)
+            val pageSize = extractPageSize(html)
             val storyId = "${sourceId}_${extractSlug(storyUrl)}"
-            var currentStart = DEFAULT_PAGE_SIZE
+            var currentStart = pageSize
             var pageCount = 0
 
             while (pageCount < MAX_PAGINATION_PAGES) {
-                val sign = makeBookIndexSign(signKey, currentStart, DEFAULT_PAGE_SIZE, cut)
-                val indexUrl = "$baseUrl/book/index?bookId=$bookId&start=$currentStart&size=$DEFAULT_PAGE_SIZE&signKey=$signKey&sign=$sign"
+                val sign = makeBookIndexSign(signKey, currentStart, pageSize, cut)
+                val indexUrl = "$baseUrl/book/index?bookId=$bookId&start=$currentStart&size=$pageSize&signKey=$signKey&sign=$sign"
 
                 val fragmentHtml = fetchAjaxFragment(indexUrl, storyUrl)
                 val fragmentDoc = Jsoup.parseBodyFragment(fragmentHtml)
@@ -270,7 +314,7 @@ class WikidichScraper
                 }
                 onBatchReady(pageChapters)
 
-                val nextStart = currentStart + DEFAULT_PAGE_SIZE
+                val nextStart = currentStart + pageSize
                 val hasNextPage = fragmentDoc.selectFirst("ul.pagination li a[data-action='loadBookIndex'][data-start='$nextStart']") != null
                 if (!hasNextPage) {
                     break
@@ -314,19 +358,32 @@ class WikidichScraper
                 content
             }
 
-        override suspend fun getCompletedStories(page: Int): List<Story> =
+        override suspend fun getCompletedStories(
+            page: Int,
+            maleOnly: Boolean,
+        ): List<Story> =
             withContext(Dispatchers.IO) {
                 val startParam = if (page > 1) "&start=${(page - 1) * SEARCH_PAGE_SIZE}" else ""
-                val url = "$baseUrl/bang-xep-hang?so=5$startParam"
-                val doc = fetchDocumentWithRetry(url)
-                checkLoginRequired(doc)
-                val stories = parseStoryList(doc)
-                if (stories.isNotEmpty()) {
-                    stories.map { it.copy(status = "Hoàn thành") }
+                if (!maleOnly) {
+                    val url = "$baseUrl/bang-xep-hang?so=5$startParam"
+                    val doc = fetchDocumentWithRetry(url)
+                    checkLoginRequired(doc)
+                    val stories = parseStoryList(doc)
+                    if (stories.isNotEmpty()) {
+                        stories.map { it.copy(status = "Hoàn thành") }
+                    } else {
+                        val fallbackDoc =
+                            fetchDocumentWithRetry(
+                                "$baseUrl/tim-kiem?qs=2&$COMPLETED_STATUS_PARAM&$NEWEST_SORT_PARAM$startParam",
+                            )
+                        checkLoginRequired(fallbackDoc)
+                        parseStoryList(fallbackDoc).map { it.copy(status = "Hoàn thành") }
+                    }
                 } else {
-                    val fallbackDoc = fetchDocumentWithRetry("$baseUrl/tim-kiem?status=5794f03dd7ced228f4419191&qs=2$startParam")
-                    checkLoginRequired(fallbackDoc)
-                    parseStoryList(fallbackDoc).map { it.copy(status = "Hoàn thành") }
+                    val url = "$baseUrl/tim-kiem?qs=2&$MALE_GENDER_PARAM&$COMPLETED_STATUS_PARAM&$NEWEST_SORT_PARAM$startParam"
+                    val doc = fetchDocumentWithRetry(url)
+                    checkLoginRequired(doc)
+                    parseStoryList(doc).map { it.copy(status = "Hoàn thành") }
                 }
             }
 
@@ -335,16 +392,14 @@ class WikidichScraper
             page: Int,
             minChapters: Int,
             completedOnly: Boolean,
+            maleOnly: Boolean,
         ): List<Story> =
             withContext(Dispatchers.IO) {
                 val filterParam = GENRE_QUERY_MAP[genreSlug] ?: return@withContext emptyList()
-                val statusParam = if (completedOnly) "&status=5794f03dd7ced228f4419191" else ""
-                val cal = java.util.Calendar.getInstance()
-                val month = cal.get(java.util.Calendar.MONTH) + 1
-                val year = cal.get(java.util.Calendar.YEAR)
+                val genderParam = if (maleOnly) "&$MALE_GENDER_PARAM" else ""
+                val statusParam = if (completedOnly) "&$COMPLETED_STATUS_PARAM" else ""
                 val startParam = if (page > 1) "&start=${(page - 1) * SEARCH_PAGE_SIZE}" else ""
-                // Chế độ 2 trên wikicv.org: Tìm kiếm theo bộ lọc (status, tag/genre/age/gender, tc, tf=0, m, y, q=)
-                val url = "$baseUrl/tim-kiem?qs=1$statusParam&$filterParam&tc=&tf=0&m=$month&y=$year&q=$startParam"
+                val url = "$baseUrl/tim-kiem?qs=2&$filterParam$genderParam$statusParam&$NEWEST_SORT_PARAM$startParam"
                 val doc = fetchDocumentWithRetry(url)
                 checkLoginRequired(doc)
                 val stories = parseStoryList(doc)
@@ -357,45 +412,25 @@ class WikidichScraper
 
         override suspend fun getGenreList(): List<Genre> =
             listOf(
-                Genre("Tiên Hiệp", "tien-hiep"),
-                Genre("Huyền Huyễn", "huyen-huyen"),
-                Genre("Võ Hiệp", "vo-hiep"),
-                Genre("Xuyên Không", "xuyen-khong"),
-                Genre("Xuyên Việt", "xuyen-viet"),
-                Genre("Trọng Sinh", "trong-sinh"),
-                Genre("Ngôn Tình", "ngon-tinh"),
-                Genre("Đam Mỹ", "dam-my"),
-                Genre("Bách Hợp", "bach-hop"),
-                Genre("Truyện Nam", "truyen-nam"),
-                Genre("Đô Thị", "do-thi"),
-                Genre("Hiện Đại", "hien-dai"),
-                Genre("Cổ Đại", "co-dai"),
-                Genre("Tương Lai", "tuong-lai"),
-                Genre("Võng Du", "vong-du"),
-                Genre("Mạt Thế", "mat-the"),
-                Genre("Khoa Huyễn", "khoa-huyen"),
-                Genre("Ma Pháp", "ma-phap"),
-                Genre("Điền Văn", "dien-van"),
-                Genre("Mỹ Thực", "my-thuc"),
-                Genre("Không Gian", "khong-gian"),
-                Genre("Trạch Đấu", "trach-dau"),
-                Genre("Cung Đấu", "cung-dau"),
-                Genre("Trinh Thám", "trinh-tham"),
-                Genre("Linh Dị", "linh-di"),
-                Genre("Hệ Thống", "he-thong"),
-                Genre("Giới Giải Trí", "gioi-giai-tri"),
-                Genre("Sinh Con", "sinh-con"),
-                Genre("Chủ Công", "chu-cong"),
-                Genre("Đồng Nhân", "dong-nhan"),
-                Genre("Diễn Sinh", "dien-sinh"),
-                Genre("Hài Hước", "hai-huoc"),
-                Genre("Nhẹ Nhàng", "nhe-nhang"),
-                Genre("Chữa Lành", "chua-lanh"),
-                Genre("Đoàn Sủng", "doan-sung"),
-                Genre("Ngọt Sủng", "ngot-sung"),
-                Genre("Vạn Nhân Mê", "van-nhan-me"),
-                Genre("Dị Năng", "di-nang"),
-                Genre("Dị Giới", "di-gioi"),
+                Genre("Tình cảm", "tinh-cam"),
+                Genre("Làm sự nghiệp", "lam-su-nghiep"),
+                Genre("Tiên hiệp", "tien-hiep"),
+                Genre("Huyền huyễn", "huyen-huyen"),
+                Genre("Khoa học viễn tưởng", "khoa-hoc-vien-tuong"),
+                Genre("Mạt thế", "mat-the"),
+                Genre("Sinh tồn", "sinh-ton"),
+                Genre("Tranh bá", "tranh-ba"),
+                Genre("Võ hiệp", "vo-hiep"),
+                Genre("Trinh thám", "trinh-tham"),
+                Genre("Kinh dị", "kinh-di"),
+                Genre("Quan trường", "quan-truong"),
+                Genre("Kinh thương", "kinh-thuong"),
+                Genre("Quân sự", "quan-su"),
+                Genre("Xây dựng", "xay-dung"),
+                Genre("Làm ruộng", "lam-ruong"),
+                Genre("Huyền học", "huyen-hoc"),
+                Genre("Phim ảnh", "phim-anh"),
+                Genre("Manga anime", "manga-anime"),
             )
 
         internal fun extractTotalChaptersFromDetail(doc: Document): Int {
@@ -440,10 +475,12 @@ class WikidichScraper
             storyUrl: String,
         ): Int =
             runCatching {
-                val (bookId, cut, signKey) = extractSecurityParams(doc.html(), storyUrl)
-                val firstSign = makeBookIndexSign(signKey, 0, DEFAULT_PAGE_SIZE, cut)
+                val html = doc.html()
+                val (bookId, cut, signKey) = extractSecurityParams(html, storyUrl)
+                val pageSize = extractPageSize(html)
+                val firstSign = makeBookIndexSign(signKey, 0, pageSize, cut)
                 val firstUrl =
-                    "$baseUrl/book/index?bookId=$bookId&start=0&size=$DEFAULT_PAGE_SIZE&signKey=$signKey&sign=$firstSign"
+                    "$baseUrl/book/index?bookId=$bookId&start=0&size=$pageSize&signKey=$signKey&sign=$firstSign"
                 val firstHtml = fetchAjaxFragment(firstUrl, storyUrl)
                 val firstDoc = Jsoup.parseBodyFragment(firstHtml)
                 val firstPageCount = firstDoc.select("li.chapter-name a[href^='/truyen/']").size
@@ -464,9 +501,9 @@ class WikidichScraper
                 var visitedStart = 0
                 while (currentStart > visitedStart && jumps < MAX_PAGINATION_JUMPS) {
                     visitedStart = currentStart
-                    val pageSign = makeBookIndexSign(signKey, currentStart, DEFAULT_PAGE_SIZE, cut)
+                    val pageSign = makeBookIndexSign(signKey, currentStart, pageSize, cut)
                     val pageUrl =
-                        "$baseUrl/book/index?bookId=$bookId&start=$currentStart&size=$DEFAULT_PAGE_SIZE&signKey=$signKey&sign=$pageSign"
+                        "$baseUrl/book/index?bookId=$bookId&start=$currentStart&size=$pageSize&signKey=$signKey&sign=$pageSign"
                     val pageHtml = fetchAjaxFragment(pageUrl, storyUrl)
                     lastDoc = Jsoup.parseBodyFragment(pageHtml)
                     val nextMaxStart =
@@ -577,7 +614,7 @@ class WikidichScraper
                 val storyUrl = fixUrl(link)
                 val author = item.selectFirst(".book-author a")?.text()?.trim() ?: "Chưa rõ"
                 val coverImg = item.selectFirst(".cover-col img")
-                val coverUrl = coverImg?.let { it.attr("src").ifBlank { it.attr("data-src") } }?.let { fixUrl(it) } ?: ""
+                val coverUrl = extractCoverUrl(coverImg)
 
                 val genreText =
                     item
@@ -615,6 +652,39 @@ class WikidichScraper
                 )
             }
             return stories
+        }
+
+        /**
+         * Trích xuất URL ảnh bìa hợp lệ từ thẻ img, ưu tiên ứng viên đầu tiên trong [src, data-src].
+         * Loại bỏ tham số query 'o' trên mọi đường dẫn '/photo/' để chuẩn hóa cache key theo ảnh danh sách.
+         * Lưu ý: Áp dụng cho mọi host có '/photo/' vì scraper chỉ sinh URL thuộc baseUrl của chính nó
+         * (bao gồm cả trường hợp chạy trên localhost trong MockWebServer unit test).
+         */
+        internal fun extractCoverUrl(img: Element?): String {
+            if (img == null) return ""
+            val candidates = listOf(img.attr("src").trim(), img.attr("data-src").trim())
+            val raw =
+                candidates
+                    .firstOrNull { candidate ->
+                        candidate.isNotBlank() &&
+                            !candidate.startsWith("data:", ignoreCase = true) &&
+                            !candidate.contains("base64", ignoreCase = true) &&
+                            !candidate.contains("default-cover", ignoreCase = true) &&
+                            !candidate.contains("default-avatar", ignoreCase = true)
+                    }.orEmpty()
+            if (raw.isBlank()) return ""
+
+            val fixed = fixUrl(raw)
+            val httpUrl = fixed.toHttpUrlOrNull() ?: return fixed
+            return if (httpUrl.encodedPath.startsWith("/photo/") && httpUrl.queryParameter("o") != null) {
+                httpUrl
+                    .newBuilder()
+                    .removeAllQueryParameters("o")
+                    .build()
+                    .toString()
+            } else {
+                fixed
+            }
         }
 
         private fun parseChapterItems(
@@ -659,6 +729,15 @@ class WikidichScraper
             }
             return Triple(bookId, cut, signKey)
         }
+
+        private fun extractPageSize(html: String): Int =
+            Regex("""loadBookIndex\(\s*\d+\s*,\s*(\d+)""")
+                .find(html)
+                ?.groupValues
+                ?.getOrNull(1)
+                ?.toIntOrNull()
+                ?.takeIf { it > 0 }
+                ?: DEFAULT_PAGE_SIZE
 
         private fun extractSlug(url: String): String {
             val path = url.substringAfter("/truyen/").substringBefore("?").substringBefore("#")
@@ -710,7 +789,9 @@ class WikidichScraper
                     .header(
                         "User-Agent",
                         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-                    ).header("X-Requested-With", "XMLHttpRequest")
+                    ).header("Accept", "*/*")
+                    .header("Accept-Language", "vi-VN,vi;q=0.9,en;q=0.8")
+                    .header("X-Requested-With", "XMLHttpRequest")
                     .header("Referer", referer)
                     .build()
 

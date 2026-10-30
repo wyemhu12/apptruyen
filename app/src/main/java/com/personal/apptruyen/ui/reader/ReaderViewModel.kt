@@ -25,6 +25,7 @@ import com.personal.apptruyen.tts.TtsManager
 import com.personal.apptruyen.tts.TtsService
 import com.personal.apptruyen.ui.navigation.NavigationUtils
 import com.personal.apptruyen.util.TextReplacementHelper
+import com.personal.apptruyen.util.TextReplacementItem
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.collections.immutable.ImmutableList
 import kotlinx.collections.immutable.ImmutableMap
@@ -94,15 +95,26 @@ sealed interface ReaderIntent {
     data class AddStoryReplacement(
         val from: String,
         val to: String,
+        val caseSensitive: Boolean = false,
+    ) : ReaderIntent
+
+    data class UpdateStoryReplacement(
+        val index: Int,
+        val from: String,
+        val to: String,
+        val caseSensitive: Boolean,
+        val expected: TextReplacementItem? = null,
     ) : ReaderIntent
 
     data class RemoveStoryReplacement(
         val index: Int,
+        val expected: TextReplacementItem? = null,
     ) : ReaderIntent
 
     data class SendReplacementToGlobal(
         val from: String,
         val to: String,
+        val caseSensitive: Boolean = false,
     ) : ReaderIntent
 
     // Scroll
@@ -209,7 +221,7 @@ class ReaderViewModel
             val fontFamily: ReaderFontFamily = ReaderFontFamily.NOTO_SERIF,
             // Per-story text replacement
             val storyReplacementsEnabled: Boolean = false,
-            val storyReplacements: ImmutableList<Pair<String, String>> = persistentListOf(),
+            val storyReplacements: ImmutableList<TextReplacementItem> = persistentListOf(),
             // Auto-scroll
             val autoScrollEnabled: Boolean = false,
             val autoScrollSpeed: Int = 3, // 1-10
@@ -236,9 +248,9 @@ class ReaderViewModel
 
         private var chapters: List<Chapter> = emptyList()
         private var currentChapterUrl: String = chapterUrl // Track for retry
-        private var customReplacements: List<Pair<String, String>> = emptyList()
+        private var customReplacements: List<TextReplacementItem> = emptyList()
         private var storyReplacementsEnabled: Boolean = false
-        private var storyCustomReplacements: List<Pair<String, String>> = emptyList()
+        private var storyCustomReplacements: List<TextReplacementItem> = emptyList()
 
         /** In-memory cache cho prefetch. Key = chapterNumber, Value = raw content. Đóng app mất. */
         private val contentCache = java.util.concurrent.ConcurrentHashMap<Int, ChapterContentResult>()
@@ -274,13 +286,31 @@ class ReaderViewModel
                 is ReaderIntent.ToggleTextReplacement -> toggleTextReplacement()
                 is ReaderIntent.ToggleAutoFormat -> toggleAutoFormat()
                 is ReaderIntent.ToggleStoryReplacements -> toggleStoryReplacements()
-                is ReaderIntent.AddStoryReplacement -> addStoryReplacement(intent.from, intent.to)
-                is ReaderIntent.RemoveStoryReplacement -> removeStoryReplacement(intent.index)
+                is ReaderIntent.AddStoryReplacement ->
+                    addStoryReplacement(
+                        intent.from,
+                        intent.to,
+                        intent.caseSensitive,
+                    )
+                is ReaderIntent.UpdateStoryReplacement ->
+                    updateStoryReplacement(
+                        intent.index,
+                        intent.from,
+                        intent.to,
+                        intent.caseSensitive,
+                        intent.expected,
+                    )
+                is ReaderIntent.RemoveStoryReplacement ->
+                    removeStoryReplacement(
+                        intent.index,
+                        intent.expected,
+                    )
                 is ReaderIntent.SendReplacementToGlobal ->
                     viewModelScope.launch {
                         sendReplacementToGlobal(
                             intent.from,
                             intent.to,
+                            intent.caseSensitive,
                         )
                     }
                 is ReaderIntent.SaveScrollPosition -> saveScrollPosition(intent.position, intent.chapterNumber)
@@ -335,14 +365,14 @@ class ReaderViewModel
                         if (defaultVoice.isNotBlank()) {
                             ttsManager.setVoice(defaultVoice)
                         }
-                        customReplacements = TextReplacementHelper.parseCustomReplacements(customJson)
+                        customReplacements = TextReplacementHelper.parseReplacementItems(customJson)
 
                         // Load per-story replacements from Room
                         val storyData = textReplacementRepository.getStoryReplacements(storyId)
                         if (storyData != null) {
                             storyReplacementsEnabled = storyData.storyReplacementsEnabled
                             storyCustomReplacements =
-                                TextReplacementHelper.parseCustomReplacements(
+                                TextReplacementHelper.parseReplacementItems(
                                     storyData.storyCustomReplacements,
                                 )
                         }
@@ -466,9 +496,9 @@ class ReaderViewModel
             rawContent: String,
             autoFormat: Boolean,
             textReplace: Boolean,
-            globalCustom: List<Pair<String, String>>,
+            globalCustom: List<TextReplacementItem>,
             storyReplace: Boolean,
-            storyCustom: List<Pair<String, String>>,
+            storyCustom: List<TextReplacementItem>,
         ): Pair<String, ImmutableList<String>> =
             kotlinx.coroutines.withContext(workDispatcher) {
                 var processed = rawContent
@@ -478,7 +508,7 @@ class ReaderViewModel
                             .formatChapter(processed)
                 }
                 processed =
-                    TextReplacementHelper.applyAllReplacements(
+                    TextReplacementHelper.applyAllReplacementItems(
                         processed,
                         textReplace,
                         globalCustom,
@@ -1021,17 +1051,44 @@ class ReaderViewModel
         fun addStoryReplacement(
             from: String,
             to: String,
+            caseSensitive: Boolean = false,
         ) {
+            if (from.isBlank()) return
             viewModelScope.launch {
-                textReplacementRepository.addStoryReplacement(storyId, from, to)
+                textReplacementRepository.addStoryReplacement(storyId, from, to, caseSensitive)
                 reloadStoryReplacements()
                 reprocessCurrentChapter()
             }
         }
 
-        fun removeStoryReplacement(index: Int) {
+        fun updateStoryReplacement(
+            index: Int,
+            from: String,
+            to: String,
+            caseSensitive: Boolean,
+            expected: TextReplacementItem? = null,
+        ) {
+            if (from.isBlank()) return
             viewModelScope.launch {
-                textReplacementRepository.removeStoryReplacement(storyId, index)
+                textReplacementRepository.updateStoryReplacement(
+                    storyId = storyId,
+                    index = index,
+                    from = from,
+                    to = to,
+                    caseSensitive = caseSensitive,
+                    expected = expected,
+                )
+                reloadStoryReplacements()
+                reprocessCurrentChapter()
+            }
+        }
+
+        fun removeStoryReplacement(
+            index: Int,
+            expected: TextReplacementItem? = null,
+        ) {
+            viewModelScope.launch {
+                textReplacementRepository.removeStoryReplacement(storyId, index, expected)
                 reloadStoryReplacements()
                 reprocessCurrentChapter()
             }
@@ -1040,14 +1097,32 @@ class ReaderViewModel
         suspend fun sendReplacementToGlobal(
             from: String,
             to: String,
+            caseSensitive: Boolean = false,
         ): Boolean {
-            val added = textReplacementRepository.sendReplacementToGlobal(from, to)
-            if (added) {
-                if (customReplacements.none { it.first == from && it.second == to }) {
-                    customReplacements = customReplacements + (from to to)
+            val added =
+                if (caseSensitive) {
+                    textReplacementRepository.sendReplacementToGlobal(from, to, true)
+                } else {
+                    textReplacementRepository.sendReplacementToGlobal(from, to)
                 }
-                _state.update {
-                    it.copy(snackbarMessage = "Đã thêm \"$from\" → \"$to\" vào cài đặt thay chữ chung")
+            if (added) {
+                val existingIdx = customReplacements.indexOfFirst { it.from == from && it.to == to }
+                if (existingIdx >= 0) {
+                    val updatedList = customReplacements.toMutableList()
+                    updatedList[existingIdx] = TextReplacementItem(from = from, to = to, caseSensitive = caseSensitive)
+                    customReplacements = updatedList
+                    _state.update {
+                        it.copy(
+                            snackbarMessage =
+                                "Đã cập nhật chế độ hoa thường cho \"$from\" → \"$to\" trong cài đặt chung",
+                        )
+                    }
+                } else {
+                    customReplacements =
+                        customReplacements + TextReplacementItem(from = from, to = to, caseSensitive = caseSensitive)
+                    _state.update {
+                        it.copy(snackbarMessage = "Đã thêm \"$from\" → \"$to\" vào cài đặt thay chữ chung")
+                    }
                 }
                 reprocessCurrentChapter()
             } else {
@@ -1067,7 +1142,7 @@ class ReaderViewModel
             if (data != null) {
                 storyReplacementsEnabled = data.storyReplacementsEnabled
                 storyCustomReplacements =
-                    TextReplacementHelper.parseCustomReplacements(
+                    TextReplacementHelper.parseReplacementItems(
                         data.storyCustomReplacements,
                     )
                 _state.value =

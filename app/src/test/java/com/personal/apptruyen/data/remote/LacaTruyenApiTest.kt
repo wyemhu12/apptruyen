@@ -92,13 +92,17 @@ internal class FakeCacheScraper(
         onBatchReady: suspend (List<Chapter>) -> Unit,
     ) {}
 
-    override suspend fun getCompletedStories(page: Int): List<Story> = emptyList()
+    override suspend fun getCompletedStories(
+        page: Int,
+        maleOnly: Boolean,
+    ): List<Story> = emptyList()
 
     override suspend fun getStoriesByGenre(
         genreSlug: String,
         page: Int,
         minChapters: Int,
         completedOnly: Boolean,
+        maleOnly: Boolean,
     ): List<Story> = emptyList()
 
     override suspend fun getGenreList(): List<Genre> = emptyList()

@@ -5,12 +5,15 @@ import coil3.ImageLoader
 import coil3.disk.DiskCache
 import coil3.disk.directory
 import coil3.memory.MemoryCache
+import coil3.network.okhttp.OkHttpNetworkFetcherFactory
 import coil3.request.crossfade
+import com.personal.apptruyen.data.remote.buildImageOkHttpClient
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
 import dagger.hilt.android.qualifiers.ApplicationContext
 import dagger.hilt.components.SingletonComponent
+import okhttp3.OkHttpClient
 import javax.inject.Singleton
 
 @Module
@@ -21,10 +24,14 @@ object CoilModule {
     @Singleton
     fun provideImageLoader(
         @ApplicationContext context: Context,
-    ): ImageLoader =
-        ImageLoader
+        okHttpClient: OkHttpClient,
+    ): ImageLoader {
+        val imageOkHttpClient = buildImageOkHttpClient(okHttpClient)
+        return ImageLoader
             .Builder(context)
-            .crossfade(300)
+            .components {
+                add(OkHttpNetworkFetcherFactory(callFactory = { imageOkHttpClient }))
+            }.crossfade(300)
             .memoryCache {
                 MemoryCache
                     .Builder()
@@ -37,4 +44,5 @@ object CoilModule {
                     .maxSizeBytes(50L * 1024 * 1024) // 50 MB
                     .build()
             }.build()
+    }
 }

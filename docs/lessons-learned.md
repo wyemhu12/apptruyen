@@ -120,6 +120,24 @@
   1. Khi lấy URL ảnh từ thẻ `<img>` bằng Jsoup, luôn kiểm tra `data-src` / `data-lazy-src` trước `src`, và phải kiểm tra loại trừ `data:` / `base64` TRƯỚC khi nối base URL/CDN.
   2. Khi tích hợp nguồn có cơ chế throttle phía server (như `wikicv.org` giữ request 12s trên `/tim-kiem`), phải đo `time_total` của các request liên tiếp bằng `curl.exe -w`, tách các luồng duyệt trang chủ (`getCompletedStories`) ra khỏi endpoint tìm kiếm, và đặt timeout của Repository cao hơn thời gian throttle của server.
 
+### 2026-10-28: Coil 3 thiếu `SingletonImageLoader.Factory` dùng chung `ResilientDohDns` và tham số `?o=1` trên ảnh chi tiết `/photo/<id>` của `wikicv.org` gây lệch cache key & tải lại ảnh gốc 690 KB
+
+- **Triệu chứng**:
+  1. Trên màn hình tìm kiếm / khám phá (`SearchScreen`, `ExploreScreen`), khi cuộn xuống danh sách kết quả lọc của Wikidich (`wikicv.org`), các ảnh bìa `/photo/<id>` bị xoay shimmer ~10 giây rồi rơi vào icon fallback lỗi hàng loạt.
+  2. Khi bấm vào trang chi tiết truyện (`StoryDetailScreen`, ví dụ *Hoang đảo cầu sinh: Ta mang nữ thần tay xoa văn minh* — `https://wikicv.org/truyen/hoang-dao-cau-sinh-ta-mang-nu-than-tay-x-at88jlS4CDWB7GGl`), ảnh bìa hoàn toàn không hiển thị (hiện chữ cái đầu nền vàng), mặc dù ngay trước đó ở ngoài danh sách tìm kiếm truyện này đã hiện ảnh bìa bình thường.
+- **Nguyên nhân gốc**:
+  1. `AppTruyenApplication` chưa cài đặt `coil3.SingletonImageLoader.Factory` và `CoilModule.provideImageLoader` chưa gắn `OkHttpNetworkFetcherFactory`. Do đó, Coil 3 tự khởi tạo một `OkHttpClient()` mặc định hoàn toàn tách biệt với `OkHttpClient` của `AppModule`: không có `ResilientDohDns()` (dùng `Dns.SYSTEM`), không có `Referer` / `User-Agent` trình duyệt (`Chrome/122.0.0.0` đồng bộ với `cf_clearance` của WebView), và `readTimeout` mặc định chỉ 10s. Qua đo đạc bằng `curl.exe -q -sI --max-time 20` trên 18 URL `/photo/<id>` của `wikicv.org`, 100% ảnh trả về `cf-cache-status: DYNAMIC` (Cloudflare không cache edge cho `/photo/*`, mọi request đều dội về origin server với thời gian phản hồi tuần tự ~0.6s–0.8s/ảnh), khiến loạt request ảnh khi cuộn nhanh bị lỗi/timeout trên client mặc định của Coil.
+  2. Trên trang chi tiết truyện của `wikicv.org`, thẻ `<div class="book-info"><div class="cover-wrapper"><img src="/photo/<id>?o=1"/></div></div>` gắn thêm tham số `?o=1` (ảnh gốc chưa nén). Đo thực nghiệm bằng `curl.exe -q -sI`: ảnh danh sách `/photo/6adf3c8e54b8083581ec61a4` chỉ nặng **44.2 KB** (`Content-Length: 44244`), trong khi ảnh chi tiết `/photo/6adf3c8e54b8083581ec61a4?o=1` nặng tới **690.9 KB** (`Content-Length: 690910` — gấp 15.6 lần, `cf-cache-status: DYNAMIC`); trên fixture `/photo/6a950ea654b8087c7d7c833d` là **20.3 KB** so với **69.0 KB** khi có `?o=1`. Việc giữ `?o=1` làm lệch cache key của Coil 3 (miss toàn bộ RAM/Disk cache đã nạp từ danh sách) và bắt Coil tải lại file 690.9 KB qua origin `DYNAMIC` đúng lúc màn chi tiết đang gọi lấy thông tin truyện và danh sách chương.
+  3. Tại `StoryRepository.kt:445, 468` (nhánh không cache của `getStoryDetail`), hàm lưu `entity` đã gộp `resolveSafeCoverUrl` xuống Room DB nhưng lại `return resolvedStory` chứa `coverImageUrl` chưa gộp.
+- **Cách sửa**:
+  1. Tạo `CoilImageInterceptor.kt` (`ReadOnlyWikidichCookieJar`, `CoilImageInterceptor` gắn `WikidichScraper.DESKTOP_UA` + `Referer` theo domain, retry tối đa 1 lần cho HTTP 502/503/504 có `response.close()` hoặc `SocketTimeoutException` khi `!call.isCanceled()`, kèm log probe `CoilNet` đếm `inFlight` theo từng host ở bản debug, và `buildImageOkHttpClient` với `Dispatcher.maxRequestsPerHost = 4`).
+  2. Cấu hình `OkHttpNetworkFetcherFactory(callFactory = { imageOkHttpClient })` trong `CoilModule.kt` và cài đặt `SingletonImageLoader.Factory` trên `AppTruyenApplication.kt` qua `dagger.Lazy<ImageLoader>`.
+  3. Thêm `WikidichScraper.extractCoverUrl` (chọn ứng viên hợp lệ đầu tiên trong `[src, data-src]`, lọc bỏ `default-cover`/`default-avatar`/`data:`, và loại bỏ tham số `o` trên `/photo/` bằng `HttpUrl.removeAllQueryParameters("o")`); đồng thời chuẩn hóa bỏ tham số `o` trên host `wikicv.org` trong `StoryRepository.upgradeToHttps` (tự động làm sạch cả dữ liệu cũ trong Room DB khi đọc qua `toDomain()`) và trả về `resolvedStory` đã gộp `safeCoverUrl` tại `StoryRepository.kt:445-468`.
+- **Quy tắc phòng ngừa**:
+  1. Khi sử dụng Coil 3 (`coil-network-okhttp`) trong ứng dụng đã có `OkHttpClient` tùy chỉnh (DoH, CookieJar, custom timeout), bắt buộc cài đặt `SingletonImageLoader.Factory` trên `Application` và đăng ký `OkHttpNetworkFetcherFactory` tường minh để Coil không rơi về `OkHttpClient()` mặc định.
+  2. Khi dùng chung cookie Cloudflare (`cf_clearance`) giữa WebView/Scraper và ImageLoader, phải dùng chung một hằng `User-Agent` duy nhất và bọc `CookieJar` ở chế độ chỉ đọc theo đúng domain để không lưu rác `Set-Cookie` từ CDN ảnh bên thứ ba.
+  3. Đảm bảo URL ảnh bìa ở trang danh sách và trang chi tiết của cùng một nguồn được chuẩn hóa về cùng một URL (bỏ tham số kích thước gốc như `?o=1` bằng `HttpUrl`) để tận dụng tối đa RAM/Disk cache của Coil khi chuyển màn hình.
+
 ## Room / Dữ liệu
 
 ### 2026-10-14: Chữ ký API thực tế của Room 3.0.3 (`androidx.room3`) cho Migration, Constructor và `withWriteTransaction`
@@ -233,6 +251,24 @@
   2. Với các nguồn truyện mà trang danh sách/chi tiết có thể thiếu `totalChapters`, luôn kết hợp fallback từ phân trang danh sách chương, đồng bộ đơn điệu (`updateTotalChaptersIfGreater`) từ bảng `chapters` sang bảng `stories`, và không bao giờ hiển thị mẫu số `/0 chương` trên UI.
 
 
+### 2026-10-30: Tìm kiếm từ khóa trên Wikidich phớt lờ thể loại và tải chương theo lô bỏ sót chương giữa khi mạng chập chờn
+
+- **Triệu chứng**:
+  1. Khi người dùng nhập từ khóa trên `SearchScreen` kèm chọn thể loại (ví dụ `"Tiên hiệp"` hoặc `"Làm sự nghiệp"`) trên nguồn `Wikidich`, kết quả trả về không lọc theo thể loại trên server và không thể cuộn tải thêm trang 2+. Ngoài ra, danh sách thể loại cũ của Wikidich trộn lẫn 35 nhãn gồm cả `tag=`, `age=`, `official=`, `ending=` và mục ngừng dùng `Võng du`, đồng thời lọc hậu kiểm `maleOnly` thiếu 3 nhãn (`"nữ tôn"`, `"không cp"`, `"đa nguyên"`).
+  2. Khi bật đồng thời 3 nguồn truyện, danh sách thể loại giữa các nguồn không đồng nhất và một nguồn chậm/mở cổng đăng nhập làm ảnh hưởng trải nghiệm chung.
+  3. Khi tải nhiều chương offline lúc mạng Wi-Fi/4G chập chờn ngắn hạn hoặc khi danh sách `chapters` trong `StoryDetailViewModel` chưa được sắp xếp trước khi `.take(count)`, một vài chương ở giữa bị bỏ qua ("nhảy cóc chương").
+- **Nguyên nhân gốc**:
+  1. `WikidichScraper.search(keyword, completedOnly)` chỉ xây dựng URL `/tim-kiem?q=$encoded&qs=1` mà không truyền `genre=`, `gender=`, `status=`, `start=`; `SearchViewModel.search()` luôn gọi `repository.searchStories(query, completedOnly = false)` cho mọi nguồn và đặt `canLoadMore = false`.
+  2. `SettingsKeys.ENABLED_SOURCES` trước đây lưu tập hợp nhiều nguồn dạng CSV (`"tangthuvien,sstruyen,wikidich"`).
+  3. `DownloadRepository.fetchChapterWithRetry` chỉ thử 2 lần với delay cố định và không có lượt tải bù (`retryPass`) cuối phiên sau khi đường truyền ổn định lại; `StoryDetailViewModel.downloadChapters(count)` và `downloadAll()` lọc `!it.isDownloaded` nhưng thiếu `.sortedBy { it.chapterNumber }` (khác với `downloadRange` đã có `.sortedBy`).
+- **Cách sửa**:
+  1. Chuẩn hóa `WikidichScraper.getGenreList()` và `GENRE_QUERY_MAP` về đúng 19 thể loại `Loại hình` (`genre=<24-hex ObjectId>`), bổ sung đủ 7 nhãn `NON_MALE_WIKIDICH_GENDERS`, và mở rộng `search(keyword, completedOnly, page, maleOnly, genreSlug)` gửi đầy đủ tham số lên `/tim-kiem?q=$encoded&qs=1...`.
+  2. Chuẩn hóa Đơn Nguồn Hoạt Động qua `SourceIds.resolveSingleSource`, `IStoryRepository.observeActiveSource()` / `setActiveSource(sourceId)` đồng bộ 2 chiều giữa `SettingsScreen`, `SearchScreen`, và `ExploreScreen`.
+  3. Nâng `MAX_RETRY_ATTEMPTS = 3` kèm exponential backoff, tách `persistDownloadedChapter`, bổ sung `retryPass` cuối phiên trong `DownloadRepository.downloadChapters`, và thêm `.sortedBy { it.chapterNumber }` trong `StoryDetailViewModel.downloadChapters(count)` / `downloadAll()`.
+- **Quy tắc phòng ngừa**:
+  1. Mọi thao tác chọn danh sách chương chưa tải để đưa vào `DownloadService` (`downloadChapters`, `downloadAll`, `downloadRange`) bắt buộc phải `.sortedBy { it.chapterNumber }` trước khi `.take(count)`.
+  2. Khi mở rộng hàm interface (`StorySource.search`) được test bằng MockK không relaxed, luôn giữ nguyên lời gọi hàm ít tham số cho các nhánh mặc định hoặc định tuyến rõ ràng để tránh lỗi `MockKException: no answer found` trên các unit test hiện hữu.
+
 ## Coroutines / Lifecycle
 
 ### 2026-10-16: Khắc phục 6 nhóm lỗi Critical/High về Sao lưu Streaming, Room `ON DELETE CASCADE`, Chiếu nhẹ `CursorWindow`, `DownloadService` Token/Timeout, TTS `onDone` Race và `CancellationException`
@@ -263,6 +299,25 @@
   2. Trên bảng cha có `FOREIGN KEY ... ON DELETE CASCADE`, tuyệt đối không dùng `INSERT OR REPLACE` khi mục đích là hợp nhất (merge) dữ liệu sao lưu; phải dùng `INSERT OR IGNORE` kết hợp `UPDATE`.
   3. Mọi khối `catch (e: Exception)` hoặc hàm chuyển đổi ngoại lệ trong `suspend fun` bắt buộc phải kiểm tra `if (e is CancellationException) throw e` ở dòng đầu tiên.
   4. Khi thêm tham số mặc định (như `nowMillis: Long = System.currentTimeMillis()`) vào hàm `suspend` đang được MockK stub trong unit test, luôn giữ một hàm overload không tham số gọi sang hàm có tham số để tránh lệch giá trị mặc định tại thời điểm stubbing so với thời điểm gọi.
+
+### 2026-10-30: `async` không bọc `coroutineScope` trong `viewModelScope.launch` làm sập toàn ứng dụng, `WikidichScraper` lệch `pageSize = 501`, và `SsTruyenScraper` parse nhầm thẻ thể loại `hasPart` thành truyện
+
+- **Triệu chứng**:
+  1. Khi bấm vào một bộ truyện trên ứng dụng (ví dụ truyện từ nguồn Wikidich khi danh sách chương AJAX lỗi, hoặc bấm vào một trong 6 mục đầu tiên trên màn hình Khám Phá của SsTruyện), ứng dụng bị văng ngay lập tức (`FATAL EXCEPTION: main` — `java.lang.Exception: Không có kết nối mạng và chưa có dữ liệu cache` tại `StoryRepository.getFirstPageChapterList(StoryRepository.kt:677)`).
+  2. Trên `https://wikicv.org`, script tải danh sách chương đã đổi từ `loadBookIndex(0, 99, false)` sang `loadBookIndex(0, 501, false)` (mỗi trang AJAX trả về 501 chương và thanh phân trang dùng `data-start="501"`, `data-size="501"`), khiến `WikidichScraper` hardcode `DEFAULT_PAGE_SIZE = 99` tính sai `totalPages` và bỏ sót chương khi tải trang 2+.
+  3. Trên trang chủ `https://sstruyen.pics/`, mục `"SSTruyen đề xuất thể loại"` gắn thuộc tính `itemProp="hasPart"` lên 6 thẻ `<a href="/the-loai/huyen-huyen">`, `<a href="/the-loai/ngon-tinh">`..., khiến `SsTruyenScraper.parseStoryList` parse nhầm 6 thẻ thể loại thành 6 bộ truyện có URL `/the-loai/...`.
+- **Nguyên nhân gốc**:
+  1. Trong `StoryDetailViewModel.loadStoryDetail()`, cặp `val chaptersDeferred = async { repository.getFirstPageChapterList(...) }` và `val progressDeferred = async { ... }` được gọi trực tiếp trên receiver `CoroutineScope` của `viewModelScope.launch` (`StandaloneCoroutine`) mà không bọc trong `coroutineScope { ... }`. Theo cơ chế Structured Concurrency của Kotlin Coroutines, khi coroutine con `async` ném ngoại lệ chưa bắt, nó lập tức hủy coroutine cha (`StandaloneCoroutine`) và chuyển thẳng ngoại lệ lên `CoroutineExceptionHandler` / `UncaughtExceptionHandler` của `Dispatchers.Main.immediate`, khiến khối `try / catch (e: Exception)` bao quanh `.await()` hoàn toàn không bắt được lỗi!
+  2. `WikidichScraper` dùng hằng số tĩnh `DEFAULT_PAGE_SIZE = 99` cho mọi lời gọi `/book/index`, trong khi `wikicv.org` hiện truyền `size = 501` trong `loadBookIndex(0, 501, false)`.
+  3. Nhánh `hasPartItems` trong `SsTruyenScraper.parseStoryList` không kiểm tra `!href.contains("/truyen/")`, còn `extractStorySlug` fallback về `.substringAfterLast("/")`, dẫn đến các liên kết `/the-loai/...` có gắn `itemProp="hasPart"` bị biến thành `Story` giả.
+- **Cách sửa**:
+  1. Trong `StoryDetailViewModel.loadStoryDetail()`, bọc hai lời gọi `async` vào trong `coroutineScope { ... }` để mọi ngoại lệ ném từ `getFirstPageChapterList` hoặc `getReadingProgress` được ném lại tại điểm chờ và đi vào khối `try / catch (e: Exception)` của `loadStoryDetail()`, cập nhật `DetailState.error` hiển thị tiếng Việt thay vì làm sập ứng dụng.
+  2. Trong `WikidichScraper.kt`, bổ sung `extractPageSize(html)` trích xuất động tham số `size` từ `loadBookIndex(0, <size>, ...)` (fallback `DEFAULT_PAGE_SIZE = 99` cho HTML cũ/unit test) và dùng `pageSize` đồng nhất trong `getFirstPageChapters`, `getRemainingChapters`, và `fetchTotalChaptersFromBookIndex`; đồng thời bổ sung header `Accept: */*`, `Accept-Language: vi-VN,vi;q=0.9,en;q=0.8` trong `fetchAjaxFragment`.
+  3. Trong `SsTruyenScraper.parseStoryList`, thêm điều kiện `!href.contains("/truyen/")` để loại bỏ các thẻ `<a itemProp="hasPart">` trỏ tới `/the-loai/...`.
+  4. Trong `StoryRepository.kt`, giữ nguyên `ScraperException` hoặc đính kèm `cause` khi ném ngoại lệ ở `getFirstPageChapterList` / `getChapterList`, và cắt bỏ query/fragment trong `extractStoryId`.
+- **Quy tắc phòng ngừa**:
+  1. Tuyệt đối không bao giờ gọi `async { ... }` trực tiếp trên receiver của `viewModelScope.launch { ... }` rồi bọc `try / catch` quanh `.await()`; bắt buộc phải bọc cụm `async` bên trong `coroutineScope { ... }` (hoặc `supervisorScope { ... }`) để ngoại lệ không truyền ngược lên hủy `StandaloneCoroutine` trên Main thread.
+  2. Khi parse danh sách truyện bằng selector thuộc tính chung như `[itemProp=hasPart]`, bắt buộc phải kiểm tra đường dẫn `href.contains("/truyen/")` để không thu thập nhầm liên kết thể loại hoặc banner.
 
 ## Build / Gradle / CI
 

@@ -15,13 +15,21 @@ import kotlinx.coroutines.flow.Flow
 interface IStoryRepository {
 
     // ── Search & Discovery ──
-    suspend fun getCompletedStories(page: Int = 1): List<Story>
+    fun observeActiveSource(): Flow<String>
+
+    suspend fun setActiveSource(sourceId: String)
+
+    suspend fun getCompletedStories(
+        page: Int = 1,
+        maleOnly: Boolean,
+    ): List<Story>
 
     suspend fun getStoriesByGenre(
         genreSlug: String,
         page: Int = 1,
         minChapters: Int = 0,
         completedOnly: Boolean = true,
+        maleOnly: Boolean,
     ): List<Story>
 
     suspend fun getGenreList(): List<Genre>
@@ -29,6 +37,9 @@ interface IStoryRepository {
     suspend fun searchStories(
         keyword: String,
         completedOnly: Boolean = false,
+        page: Int = 1,
+        maleOnly: Boolean = true,
+        genreSlug: String? = null,
     ): List<Story>
 
     // ── Story Detail ──

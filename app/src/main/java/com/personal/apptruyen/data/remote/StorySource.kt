@@ -21,6 +21,15 @@ interface StorySource {
         completedOnly: Boolean = false,
     ): List<Story>
 
+    /** Tìm truyện theo keyword kèm phân trang, lọc truyện nam và thể loại (mặc định ủy quyền về search 2 tham số ở trang 1) */
+    suspend fun search(
+        keyword: String,
+        completedOnly: Boolean,
+        page: Int,
+        maleOnly: Boolean = true,
+        genreSlug: String? = null,
+    ): List<Story> = if (page <= 1) search(keyword, completedOnly) else emptyList()
+
     /** Lấy chi tiết truyện */
     suspend fun getStoryDetail(storyUrl: String): Story
 
@@ -48,7 +57,10 @@ interface StorySource {
     suspend fun getChapterContentWithTitle(chapterUrl: String): ChapterContentResult = ChapterContentResult(content = getChapterContent(chapterUrl))
 
     /** Truyện hoàn thành mới nhất (phân trang) */
-    suspend fun getCompletedStories(page: Int = 1): List<Story>
+    suspend fun getCompletedStories(
+        page: Int = 1,
+        maleOnly: Boolean,
+    ): List<Story>
 
     /** Truyện theo thể loại (phân trang). completedOnly=true chỉ lấy truyện hoàn thành. */
     suspend fun getStoriesByGenre(
@@ -56,6 +68,7 @@ interface StorySource {
         page: Int = 1,
         minChapters: Int = 0,
         completedOnly: Boolean = true,
+        maleOnly: Boolean,
     ): List<Story>
 
     /** Danh sách thể loại */

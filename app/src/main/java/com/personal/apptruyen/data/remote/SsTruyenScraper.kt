@@ -710,7 +710,10 @@ class SsTruyenScraper
          * Truyện hoàn thành.
          * URL: /danh-sach/bo-loc?status=completed&sort=updatedAt&page={page}
          */
-        override suspend fun getCompletedStories(page: Int): List<Story> =
+        override suspend fun getCompletedStories(
+            page: Int,
+            maleOnly: Boolean,
+        ): List<Story> =
             withContext(Dispatchers.IO) {
                 val url = "$baseUrl/danh-sach/bo-loc?status=completed&sort=updatedAt&page=$page"
                 parseStoryListPage(url).map { it.copy(status = "Hoàn thành") }
@@ -726,6 +729,7 @@ class SsTruyenScraper
             page: Int,
             minChapters: Int,
             completedOnly: Boolean,
+            maleOnly: Boolean,
         ): List<Story> =
             withContext(Dispatchers.IO) {
                 val statusParam = if (completedOnly) "status=completed" else ""
@@ -812,7 +816,7 @@ class SsTruyenScraper
                     val href = item.attr("abs:href").ifEmpty { item.attr("href") }
                     val titleEl = item.select("p[itemProp=name], h3, .title").firstOrNull()
                     val title = titleEl?.text()?.trim() ?: item.text().trim()
-                    if (title.isBlank() || href.isBlank()) return@forEach
+                    if (title.isBlank() || href.isBlank() || !href.contains("/truyen/")) return@forEach
                     val slug = extractStorySlug(href)
                     if (slug.isBlank()) return@forEach
 

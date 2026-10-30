@@ -21,6 +21,7 @@ import kotlinx.collections.immutable.persistentListOf
 import kotlinx.collections.immutable.toImmutableList
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import timber.log.Timber
@@ -158,11 +159,13 @@ class StoryDetailViewModel
                     }
 
                     // Phase 1: First page chapters + reading progress in parallel → display INSTANTLY
-                    val chaptersDeferred = async { repository.getFirstPageChapterList(decodedUrl, story.id) }
-                    val progressDeferred = async { readingProgressRepository.getReadingProgress(story.id) }
-
-                    val (firstPageChapters, totalPages) = chaptersDeferred.await()
-                    val progress = progressDeferred.await()
+                    val (chapterListResult, progress) =
+                        coroutineScope {
+                            val chaptersDeferred = async { repository.getFirstPageChapterList(decodedUrl, story.id) }
+                            val progressDeferred = async { readingProgressRepository.getReadingProgress(story.id) }
+                            chaptersDeferred.await() to progressDeferred.await()
+                        }
+                    val (firstPageChapters, totalPages) = chapterListResult
 
                     // Display immediately with first page data
                     val totalCount = repository.getChapterCount(story.id)
@@ -233,6 +236,7 @@ class StoryDetailViewModel
                     }
                 } catch (e: Exception) {
                     if (e is kotlinx.coroutines.CancellationException) throw e
+                    Timber.tag("StoryDetail").e(e, "Failed to load story detail for %s", storyUrl)
                     _state.value =
                         _state.value.copy(
                             isLoading = false,
@@ -261,18 +265,22 @@ class StoryDetailViewModel
         }
 
         fun downloadChapters(count: Int) {
-            val chapters =
+            val undownloaded =
                 _state.value.chapters
                     .filter { !it.isDownloaded }
+                    .sortedBy { it.chapterNumber }
                     .take(count)
-            if (chapters.isEmpty()) return
-            performDownload(chapters)
+            if (undownloaded.isEmpty()) return
+            performDownload(undownloaded)
         }
 
         fun downloadAll() {
-            val chapters = _state.value.chapters.filter { !it.isDownloaded }
-            if (chapters.isEmpty()) return
-            performDownload(chapters)
+            val undownloaded =
+                _state.value.chapters
+                    .filter { !it.isDownloaded }
+                    .sortedBy { it.chapterNumber }
+            if (undownloaded.isEmpty()) return
+            performDownload(undownloaded)
         }
 
         fun downloadRange(

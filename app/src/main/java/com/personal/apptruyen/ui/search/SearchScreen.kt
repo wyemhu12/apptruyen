@@ -17,6 +17,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.AccountCircle
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.FilterList
 import androidx.compose.material.icons.filled.History
@@ -35,6 +36,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.personal.apptruyen.data.local.SourceIds
 import com.personal.apptruyen.data.model.Genre
 import com.personal.apptruyen.ui.components.ShimmerStoryCard
 import com.personal.apptruyen.ui.components.StoryCardPremium
@@ -80,7 +82,11 @@ fun SearchScreen(
                     .lastOrNull()
                     ?.index ?: 0
             val totalItems = listState.layoutInfo.totalItemsCount
-            lastVisibleItem >= totalItems - 3 && !state.isLoadingMore && state.canLoadMore && state.isFilterActive
+            lastVisibleItem >= totalItems - 3 &&
+                !state.isLoading &&
+                !state.isLoadingMore &&
+                state.canLoadMore &&
+                (state.isFilterActive || state.hasSearched)
         }
     }
 
@@ -178,12 +184,13 @@ fun SearchScreen(
                 }
 
                 // Filter button — badge indicates active filter count
-                // Badge: completedOnly=true là default, chỉ tính khi tắt (=false)
+                // Badge: completedOnly=true và maleOnly=true là default, chỉ tính khi tắt (=false)
                 val activeFilterCount =
                     listOfNotNull(
                         state.selectedGenre,
                         if (state.chapterFilter != ChapterCountFilter.NONE) true else null,
                         if (!state.completedOnly) true else null, // Tắt Full = active filter
+                        if (state.activeSource == SourceIds.WIKIDICH && !state.maleOnly) true else null, // Tắt Truyện nam = active filter
                     ).size
 
                 BadgedBox(
@@ -226,93 +233,115 @@ fun SearchScreen(
                 }
             }
 
-            // ─── Active filter chips (compact, dismissible) ───
-            val hasActiveFilters =
-                state.selectedGenre != null ||
-                    state.chapterFilter != ChapterCountFilter.NONE ||
-                    !state.completedOnly // Tắt Full = non-default = active filter
-
-            AnimatedVisibility(
-                visible = hasActiveFilters,
-                enter = fadeIn() + expandVertically(),
-                exit = fadeOut() + shrinkVertically(),
+            // ─── Active source & filter chips (compact, dismissible) ───
+            Row(
+                modifier =
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 4.dp)
+                        .horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalAlignment = Alignment.CenterVertically,
             ) {
-                Row(
-                    modifier =
-                        Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 16.dp, vertical = 4.dp)
-                            .horizontalScroll(rememberScrollState()),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    state.selectedGenre?.let { genre ->
-                        InputChip(
-                            selected = true,
-                            onClick = {
-                                viewModel.applyAllFilters(
-                                    genre = null,
-                                    chapterFilter = state.chapterFilter,
-                                    completedOnly = state.completedOnly,
-                                )
-                            },
-                            label = { Text(genre.name, style = MaterialTheme.typography.labelSmall) },
-                            trailingIcon = {
-                                Icon(
-                                    Icons.Default.Clear,
-                                    contentDescription = "Bỏ thể loại",
-                                    modifier = Modifier.size(14.dp),
-                                )
-                            },
-                            shape = RoundedCornerShape(20.dp),
-                            modifier = Modifier.height(28.dp),
-                        )
-                    }
-                    if (state.chapterFilter != ChapterCountFilter.NONE) {
-                        InputChip(
-                            selected = true,
-                            onClick = {
-                                viewModel.applyAllFilters(
-                                    genre = state.selectedGenre,
-                                    chapterFilter = ChapterCountFilter.NONE,
-                                    completedOnly = state.completedOnly,
-                                )
-                            },
-                            label = { Text(state.chapterFilter.label, style = MaterialTheme.typography.labelSmall) },
-                            trailingIcon = {
-                                Icon(
-                                    Icons.Default.Clear,
-                                    contentDescription = "Bỏ lọc số chương",
-                                    modifier = Modifier.size(14.dp),
-                                )
-                            },
-                            shape = RoundedCornerShape(20.dp),
-                            modifier = Modifier.height(28.dp),
-                        )
-                    }
-                    if (!state.completedOnly) {
-                        // User đã tắt Full → hiện chip "Cả đang ra" để dismiss
-                        InputChip(
-                            selected = true,
-                            onClick = {
-                                viewModel.applyAllFilters(
-                                    genre = state.selectedGenre,
-                                    chapterFilter = state.chapterFilter,
-                                    completedOnly = true, // Reset về default
-                                )
-                            },
-                            label = { Text("Cả đang ra", style = MaterialTheme.typography.labelSmall) },
-                            trailingIcon = {
-                                Icon(
-                                    Icons.Default.Clear,
-                                    contentDescription = "Bật lại lọc Full",
-                                    modifier = Modifier.size(14.dp),
-                                )
-                            },
-                            shape = RoundedCornerShape(20.dp),
-                            modifier = Modifier.height(28.dp),
-                        )
-                    }
+                val activeSourceLabel = SourceIds.SOURCE_LABELS[state.activeSource] ?: state.activeSource
+                AssistChip(
+                    onClick = { showFilterSheet = true },
+                    label = { Text("Nguồn: $activeSourceLabel", style = MaterialTheme.typography.labelSmall) },
+                    shape = RoundedCornerShape(20.dp),
+                    modifier = Modifier.height(28.dp),
+                )
+                state.selectedGenre?.let { genre ->
+                    InputChip(
+                        selected = true,
+                        onClick = {
+                            viewModel.applyAllFilters(
+                                genre = null,
+                                chapterFilter = state.chapterFilter,
+                                completedOnly = state.completedOnly,
+                                maleOnly = state.maleOnly,
+                            )
+                        },
+                        label = { Text(genre.name, style = MaterialTheme.typography.labelSmall) },
+                        trailingIcon = {
+                            Icon(
+                                Icons.Default.Clear,
+                                contentDescription = "Bỏ thể loại",
+                                modifier = Modifier.size(14.dp),
+                            )
+                        },
+                        shape = RoundedCornerShape(20.dp),
+                        modifier = Modifier.height(28.dp),
+                    )
+                }
+                if (state.chapterFilter != ChapterCountFilter.NONE) {
+                    InputChip(
+                        selected = true,
+                        onClick = {
+                            viewModel.applyAllFilters(
+                                genre = state.selectedGenre,
+                                chapterFilter = ChapterCountFilter.NONE,
+                                completedOnly = state.completedOnly,
+                                maleOnly = state.maleOnly,
+                            )
+                        },
+                        label = { Text(state.chapterFilter.label, style = MaterialTheme.typography.labelSmall) },
+                        trailingIcon = {
+                            Icon(
+                                Icons.Default.Clear,
+                                contentDescription = "Bỏ lọc số chương",
+                                modifier = Modifier.size(14.dp),
+                            )
+                        },
+                        shape = RoundedCornerShape(20.dp),
+                        modifier = Modifier.height(28.dp),
+                    )
+                }
+                if (!state.completedOnly) {
+                    // User đã tắt Full → hiện chip "Cả đang ra" để dismiss
+                    InputChip(
+                        selected = true,
+                        onClick = {
+                            viewModel.applyAllFilters(
+                                genre = state.selectedGenre,
+                                chapterFilter = state.chapterFilter,
+                                completedOnly = true, // Reset về default
+                                maleOnly = state.maleOnly,
+                            )
+                        },
+                        label = { Text("Cả đang ra", style = MaterialTheme.typography.labelSmall) },
+                        trailingIcon = {
+                            Icon(
+                                Icons.Default.Clear,
+                                contentDescription = "Bật lại lọc Full",
+                                modifier = Modifier.size(14.dp),
+                            )
+                        },
+                        shape = RoundedCornerShape(20.dp),
+                        modifier = Modifier.height(28.dp),
+                    )
+                }
+                if (state.activeSource == SourceIds.WIKIDICH && !state.maleOnly) {
+                    InputChip(
+                        selected = true,
+                        onClick = {
+                            viewModel.applyAllFilters(
+                                genre = state.selectedGenre,
+                                chapterFilter = state.chapterFilter,
+                                completedOnly = state.completedOnly,
+                                maleOnly = true,
+                            )
+                        },
+                        label = { Text("Cả truyện nữ/khác", style = MaterialTheme.typography.labelSmall) },
+                        trailingIcon = {
+                            Icon(
+                                Icons.Default.Clear,
+                                contentDescription = "Bật lại lọc truyện nam",
+                                modifier = Modifier.size(14.dp),
+                            )
+                        },
+                        shape = RoundedCornerShape(20.dp),
+                        modifier = Modifier.height(28.dp),
+                    )
                 }
             }
 
@@ -585,14 +614,18 @@ fun SearchScreen(
     // ─── Unified Filter Bottom Sheet ───
     if (showFilterSheet) {
         FilterBottomSheet(
+            activeSource = state.activeSource,
+            hasKeyword = state.query.trim().isNotBlank(),
             genres = genres,
             selectedGenre = state.selectedGenre,
             chapterFilter = state.chapterFilter,
             completedOnly = state.completedOnly,
+            maleOnly = state.maleOnly,
+            onSelectSource = { viewModel.selectSource(it) },
             onDismiss = { showFilterSheet = false },
-            onApply = { genre, chapterFilter, completedOnly ->
+            onApply = { genre, chapterFilter, completedOnly, maleOnly ->
                 showFilterSheet = false
-                viewModel.applyAllFilters(genre, chapterFilter, completedOnly)
+                viewModel.applyAllFilters(genre, chapterFilter, completedOnly, maleOnly)
             },
             onClearAll = {
                 showFilterSheet = false
@@ -603,29 +636,41 @@ fun SearchScreen(
 }
 
 /**
- * Unified filter bottom sheet — contains chapter count, status, and genre filters.
+ * Unified filter bottom sheet — contains active source, chapter count, status, audience (Wikidich maleOnly), and genre filters.
  */
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 private fun FilterBottomSheet(
+    activeSource: String,
+    hasKeyword: Boolean,
     genres: List<Genre>,
     selectedGenre: Genre?,
     chapterFilter: ChapterCountFilter,
     completedOnly: Boolean,
+    maleOnly: Boolean,
+    onSelectSource: (String) -> Unit,
     onDismiss: () -> Unit,
-    onApply: (Genre?, ChapterCountFilter, Boolean) -> Unit,
+    onApply: (Genre?, ChapterCountFilter, Boolean, Boolean) -> Unit,
     onClearAll: () -> Unit,
 ) {
     // Local state so user can adjust before applying
     var localGenre by remember { mutableStateOf(selectedGenre) }
     var localChapterFilter by remember { mutableStateOf(chapterFilter) }
     var localCompleted by remember { mutableStateOf(completedOnly) }
+    var localMaleOnly by remember { mutableStateOf(maleOnly) }
 
-    // completedOnly=true là default → chỉ tính active filter khi user TẮT nó (=false)
+    LaunchedEffect(genres, selectedGenre) {
+        if (localGenre != null && genres.none { it.slug == localGenre?.slug }) {
+            localGenre = selectedGenre
+        }
+    }
+
+    // completedOnly=true và maleOnly=true là default → chỉ tính active filter khi user TẮT (=false)
     val hasAnyFilter =
         localGenre != null ||
             localChapterFilter != ChapterCountFilter.NONE ||
-            !localCompleted
+            !localCompleted ||
+            (activeSource == SourceIds.WIKIDICH && !localMaleOnly)
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -648,6 +693,42 @@ private fun FilterBottomSheet(
                 fontWeight = FontWeight.SemiBold,
                 modifier = Modifier.padding(bottom = 20.dp),
             )
+
+            // ─── Section 0: Active Source ───
+            Text(
+                text = "Nguồn truyện",
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.Medium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(bottom = 10.dp),
+            )
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                SourceIds.ORDERED_SOURCES.forEach { sourceId ->
+                    val label = SourceIds.SOURCE_LABELS[sourceId] ?: sourceId
+                    FilterChip(
+                        selected = activeSource == sourceId,
+                        onClick = { onSelectSource(sourceId) },
+                        label = {
+                            Text(label, style = MaterialTheme.typography.labelMedium)
+                        },
+                        shape = RoundedCornerShape(20.dp),
+                        border = null,
+                        colors =
+                            FilterChipDefaults.filterChipColors(
+                                selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
+                                selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                            ),
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+            Spacer(modifier = Modifier.height(16.dp))
 
             // ─── Section 1: Chapter count ───
             Text(
@@ -718,7 +799,48 @@ private fun FilterBottomSheet(
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
             Spacer(modifier = Modifier.height(16.dp))
 
-            // ─── Section 3: Genre ───
+            // ─── Section 3: Audience (Wikidich) ───
+            if (activeSource == SourceIds.WIKIDICH) {
+                Text(
+                    text = "Đối tượng độc giả (Wikidich)",
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.Medium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(bottom = 10.dp),
+                )
+                FilterChip(
+                    selected = localMaleOnly,
+                    onClick = { localMaleOnly = !localMaleOnly },
+                    label = {
+                        Text("Truyện nam", style = MaterialTheme.typography.labelMedium)
+                    },
+                    leadingIcon =
+                        if (localMaleOnly) {
+                            {
+                                Icon(
+                                    Icons.Default.Check,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(16.dp),
+                                )
+                            }
+                        } else {
+                            null
+                        },
+                    shape = RoundedCornerShape(20.dp),
+                    border = null,
+                    colors =
+                        FilterChipDefaults.filterChipColors(
+                            selectedContainerColor = MaterialTheme.colorScheme.secondaryContainer,
+                            selectedLabelColor = MaterialTheme.colorScheme.onSecondaryContainer,
+                        ),
+                )
+
+                Spacer(modifier = Modifier.height(16.dp))
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+                Spacer(modifier = Modifier.height(16.dp))
+            }
+
+            // ─── Section 4: Genre ───
             Text(
                 text = "Thể loại",
                 style = MaterialTheme.typography.titleSmall,
@@ -726,6 +848,14 @@ private fun FilterBottomSheet(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(bottom = 10.dp),
             )
+            if (activeSource != SourceIds.WIKIDICH && hasKeyword) {
+                Text(
+                    text = "Lưu ý: Nguồn này chỉ lọc theo thể loại khi không nhập từ khóa",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(bottom = 8.dp),
+                )
+            }
             FlowRow(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -749,7 +879,7 @@ private fun FilterBottomSheet(
 
             // ─── Apply button ───
             Button(
-                onClick = { onApply(localGenre, localChapterFilter, localCompleted) },
+                onClick = { onApply(localGenre, localChapterFilter, localCompleted, localMaleOnly) },
                 modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(14.dp),
                 contentPadding = PaddingValues(vertical = 14.dp),

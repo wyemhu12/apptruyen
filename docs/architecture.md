@@ -1,6 +1,6 @@
 # Kiến trúc & Cấu trúc dự án
 
-> **Cập nhật lần cuối:** 2026-10-23 20:25
+> **Cập nhật lần cuối:** 2026-10-30 14:05
 
 ## Tổng quan kiến trúc
 
@@ -24,12 +24,11 @@
 ├──────────────────────┬──────────────────────────┤
 │    Remote Layer      │      Local Layer          │
 │  StorySource (IF)    │   Room 3.0 Database v9    │
-│  ├─ TangThuVienScrp. │   (Story/Chapter/         │
-│  ├─ SsTruyenScraper  │    ReadingProgress/Stats  │
-│  ├─ WikidichScraper  │    + BundledSQLiteDriver) │
-│  ├─ ResilientDohDns  │   Assets:                 │
-│  ├─ auth/ & cookie/  │   └─ pokemon_pokedex.json │
-│  (OkHttp + Jsoup)    │                           │
+│  ├─ SsTruyenScraper  │   (Story/Chapter/         │
+│  ├─ WikidichScraper  │    ReadingProgress/Stats  │
+│  ├─ ResilientDohDns  │    + BundledSQLiteDriver) │
+│  ├─ auth/ & cookie/  │   Assets:                 │
+│  (OkHttp + Jsoup)    │   └─ pokemon_pokedex.json │
 ├──────────────────────┴──────────────────────────┤
 │              Cross-cutting Concerns               │
 │   Hilt DI │ TtsService (Media3) │ DownloadService │
@@ -46,8 +45,9 @@ app/src/main/
 └── java/com/personal/apptruyen/
 ├── di/                          # Hilt DI modules
 │   ├── AppModule.kt             # Provides Room 3 DB (BundledSQLiteDriver), DatabaseTransactionRunner, DAOs, CoroutineScope, CookieStore, OkHttpClient (ResilientDohDns)
+│   ├── CoilModule.kt            # Provides @Singleton ImageLoader (OkHttpNetworkFetcherFactory + buildImageOkHttpClient, MemoryCache 25%, DiskCache 50MB)
 │   ├── RepositoryModule.kt      # @Binds IStoryRepository, ISourceAuthRepository, IPokemonRepository
-│   ├── ScraperModule.kt         # @Binds @IntoSet: TangThuVien + SsTruyen (sstruyen.pics) + Wikidich → Set<StorySource>
+│   ├── ScraperModule.kt         # @Binds @IntoSet: SsTruyen (sstruyen.pics) + Wikidich → Set<StorySource>
 │   └── ApplicationScope.kt     # @Qualifier cho app-scoped CoroutineScope
 ├── data/
 │   ├── model/                   # Domain models (không phụ thuộc Room)
@@ -78,9 +78,9 @@ app/src/main/
 │   ├── remote/                  # Web scraping (multi-source) & auth
 │   │   ├── StorySource.kt       # Interface chung cho mọi nguồn scrape
 │   │   ├── BaseScraper.kt       # Abstract base — shared HTTP, cache TTL 10m (CACHE_TTL_MS), selective retry, HTTPS cover upgrade
-│   │   ├── TangThuVienScraper.kt # Scrape tangthuvien.org (extends BaseScraper, customBaseUrl)
 │   │   ├── SsTruyenScraper.kt    # Scrape sstruyen.pics (extends BaseScraper)
-│   │   ├── WikidichScraper.kt    # Scrape wikicv.org (fuzzySign + AJAX pagination + ajaxFragmentCache + fetchTotalChaptersFromBookIndex)
+│   │   ├── WikidichScraper.kt    # Scrape wikicv.org (fuzzySign + AJAX pagination + ajaxFragmentCache + fetchTotalChaptersFromBookIndex + extractCoverUrl)
+│   │   ├── CoilImageInterceptor.kt # CoilImageInterceptor (BLOCKED_IMAGE_HOSTS chặn tangthuvien.org/.vn + DESKTOP_UA + Referer + retry 502/503/504/timeout + CoilNet probe), ReadOnlyWikidichCookieJar, buildImageOkHttpClient
 │   │   ├── ResilientDohDns.kt    # DNS-over-HTTPS (Cloudflare 1.1.1.1/1.0.0.1 + Google 8.8.8.8 + System DNS fallback) vượt chặn DNS WiFi công ty
 │   │   ├── ScraperException.kt  # Sealed error hierarchy (7 subtypes, LoginRequiredException, 100% thông báo tiếng Việt)
 │   │   ├── ScraperCircuitBreaker.kt # Circuit breaker pattern (CLOSED/OPEN/HALF_OPEN)
@@ -109,7 +109,7 @@ app/src/main/
 │       ├── SearchHistoryRepository.kt # Recent searches CRUD
 │       └── BackupRepository.kt    # Backup/restore: streaming ZIP export & 2-phase import via SAF + Zip Bomb guard + withWriteTransaction
 ├── util/
-│   ├── TextReplacementHelper.kt # Thay chữ: 24 default regex + custom JSON
+│   ├── TextReplacementHelper.kt # Thay chữ: DOTS_TO_REMOVE + TextReplacementItem (caseSensitive) + custom JSON
 │   ├── TextFormatHelper.kt      # Tự động format chương truyện (dấu câu, ngắt đoạn)
 │   ├── PokemonLookupHelper.kt   # Trie Longest-Match-First nhận diện tên Pokémon + từ điển Hán-Việt/đồng nhân
 │   └── CrashHandler.kt         # UncaughtExceptionHandler (catch Throwable + finally defaultHandler) → local crash log files
@@ -128,7 +128,8 @@ app/src/main/
 │   ├── components/              # Shared UI components
 │   │   ├── ShimmerEffect.kt     # Skeleton loading animations (MaterialTheme.colorScheme)
 │   │   ├── AnimatedEmptyState.kt # Animated empty state
-│   │   └── StoryCardPremium.kt  # Premium list & grid cards (badges WD, TTV, SST, TC, TF)
+│   │   ├── StoryCardPremium.kt  # Premium list & grid cards (badges WD, TTV, SST, TC, TF)
+│   │   └── TextReplacementDictionaryDialog.kt # Shared UI quản lý Từ điển thay chữ (SummarySection, DictionaryDialog bảng 4 cột + tìm kiếm, EditDialog "Thông tin" có preview)
 │   ├── auth/                    # Đăng nhập nguồn truyện
 │   │   ├── SourceLoginScreen.kt # WebView login flow + strict host/scheme navigation guard
 │   │   ├── SourceLoginViewModel.kt # StateFlow + verify session
@@ -204,7 +205,7 @@ docs/
 | coverImageUrl | TEXT | URL ảnh bìa |
 | isInLibrary | BOOL | Đã thêm vào thư viện (**indexed**) |
 | addedTimestamp | LONG | Thời gian thêm (0 = chưa add, set bởi addToLibrary()) |
-| sourceId | TEXT | Nguồn truyện: "tangthuvien", "sstruyen", "wikidich" (tương thích dữ liệu offline cũ từ "truyencom", "truyenfull", "metruyenchu") |
+| sourceId | TEXT | Nguồn truyện hoạt động: "sstruyen", "wikidich" (tương thích dữ liệu offline cũ từ "tangthuvien", "truyencom", "truyenfull", "metruyenchu") |
 | status | TEXT | Trạng thái: "Hoàn thành", "Đang ra", etc. |
 | storyReplacementsEnabled | BOOL | Bật/tắt thay chữ riêng cho truyện (default: false) |
 | storyCustomReplacements | TEXT | Danh sách thay chữ riêng, JSON format giống global (default: "") |
@@ -241,13 +242,13 @@ docs/
 
 ## Luồng dữ liệu
 
-1. **Tìm kiếm**: User → SearchVM → Repository → ∀ sources parallel → merge → List<Story>
-1b. **Lọc theo thể loại**: User → SearchVM → Repository → ∀ sources.getStoriesByGenre(slug, page, 0, completedOnly) → mỗi source xử lý server-side filter riêng (TTV: status=COMPLETED, SST: status=completed, WD: status=5794f03dd7ced228f4419191) → merge → List<Story>
+1. **Tìm kiếm & Quản lý đơn nguồn (`activeSource`)**: User → SearchVM / ExploreVM / SettingsVM ↔ `SettingsDataStore` (`ENABLED_SOURCES` chuẩn hóa đơn nguồn qua `SourceIds.resolveSingleSource`, mặc định `"sstruyen"`) → `Repository.searchStories(query, page, genre, completedOnly, maleOnly)` → gọi duy nhất nguồn đang chọn (nếu `activeSource == "wikidich"` thì truyền đủ 5 tham số vào `/tim-kiem?q={encoded}&qs=1[&genre={id}][&gender=5794f03dd7ced228f4419196][&status=5794f03dd7ced228f4419191][&start={offset}]` kèm hậu kiểm `filterStories`; nếu SST thì gọi `search(query, page)`) → `List<Story>`
+1b. **Lọc theo thể loại & Đối tượng độc giả (`maleOnly`)**: User → ExploreVM / SearchVM → `Repository.getStoriesByGenre(slug, page, minChapters, completedOnly, maleOnly)` / `getCompletedStories(page, maleOnly)` → gọi duy nhất nguồn đang chọn (`activeSources()` = 1 nguồn; bộ lọc `maleOnly` / `"Truyện nam"` chỉ hiển thị trên UI và chỉ có hiệu lực khi `activeSource == "wikidich"`, còn SST ẩn chip `"Truyện nam"` và bỏ qua `!maleOnly` trong `hasAnyNonDefaultFilter`; WD giữ nguyên `/tim-kiem?qs=2&{filter}[&gender=5794f03dd7ced228f4419196][&status=5794f03dd7ced228f4419191]&so=4&vo=1` với 19 thể loại nhóm `Loại hình` hoặc nhánh nhanh `/bang-xep-hang?so=5` khi `!maleOnly`) → `List<Story>`
 2. **Chi tiết**: User → DetailVM → Repository → Room cache → miss → sourceFor(url) → Web + Cache Room
 3. **Đọc online**: ReaderVM → Repository → check Room cache → miss → sourceFor(url) → Web
 4. **Đọc offline**: ReaderVM → Repository → check Room cache → hit → return cached content
 5. **Chi tiết offline**: DetailVM → Repository → Room cache hit (offline-first, web fallback)
-6. **Tải**: DetailVM → DownloadService (ForegroundService) → DownloadRepository.downloadChapters() → chia lô 4 chương (`DOWNLOAD_BATCH_SIZE = 4`) → tải song song mỗi lô (`coroutineScope` + `async`/`awaitAll`) → sắp xếp theo `chapterNumber` tăng dần (`sortedBy`) → tuần tự lưu Room DB (`saveChapterContent` + `updateChapterMetadata`) + emit `Flow<DownloadProgress>` (kèm adaptive delay giữa các lô và fail-fast khi hết hạn phiên đăng nhập / 3 lô lỗi liên tiếp)
+6. **Tải**: DetailVM (sắp xếp `sortedBy { it.chapterNumber }` trước khi gửi) → DownloadService (ForegroundService) → `DownloadRepository.downloadChapters()` → chia lô 4 chương (`DOWNLOAD_BATCH_SIZE = 4`, hoặc 1 chương với Wikidich) → tải song song mỗi lô (`fetchChapterWithRetry` tối đa `MAX_RETRY_ATTEMPTS = 3` kèm exponential backoff `1000ms`/`2000ms`) → sắp xếp theo `chapterNumber` tăng dần (`sortedBy`) → tuần tự lưu Room DB qua `persistDownloadedChapter` (`saveChapterContent` + `updateChapterMetadata`) + gom chương lỗi tạm thời vào `failedChapters` để chạy 1 lượt tải bù (`retryPass` tuần tự cuối phiên, giữ nguyên nhịp nghỉ 15–20s cho Wikidich và dừng ngay nếu gặp lỗi xác thực/403/429/503) + emit `Flow<DownloadProgress>`
 7. **TTS**: ReaderVM → TtsManager (proxy) → TtsService (ForegroundService) → TtsTextPreprocessor → TextToSpeech API
 8. **TTS ngầm**: TtsService + WakeLock + MediaSession → tai nghe controls + notification
 9. **TTS auto-advance**: TtsService đọc xong → ReaderVM detect → auto load chương tiếp + play
@@ -261,15 +262,15 @@ docs/
 20. **Auto-scroll**: ReaderSettingsPanel toggle → ReaderIntent.ToggleAutoScroll → LaunchedEffect loop animateScrollBy(speed*1.2f, 50ms) → tự động tắt khi chạm đáy chương (`!listState.canScrollForward`) hoặc pause on touch
 21. **Backup/Restore**: SettingsScreen SAF → SettingsVM → BackupRepository.exportBackup(ZIP) / importBackup(ZIP) → metadata.json + chapters/{storyId}/{num}.txt
 17. **Cancel Download**: UI cancel button → DetailVM.cancelDownload() → Job.cancel() → ensureActive() in repository
-18. **Per-story Text Replacement & Raw Cache**: StoryDetailScreen / ReaderSettingsPanel → DetailVM / ReaderVM → StoryDao → Room DB (`storyReplacementsEnabled` + `storyCustomReplacements` JSON) → `ReaderVM` giữ `contentCache` văn bản thô và chạy `processRawChapterContent` (`TextFormatHelper.formatChapter` + `TextReplacementHelper.applyAllReplacements` + `splitIntoParagraphs`) trên `Dispatchers.Default`; bật/tắt format hoặc thay chữ gọi `reprocessCurrentChapter()` tức thì mà không tải lại mạng
-19. **Gửi sang tổng**: ReaderSettingsPanel 🌐 → `ReaderVM.sendReplacementToGlobal()` → DataStore (global custom replacements) + cập nhật `customReplacements` trong bộ nhớ + `reprocessCurrentChapter()` + `Snackbar` tiếng Việt
+18. **Per-story Text Replacement & Raw Cache**: StoryDetailScreen / ReaderSettingsPanel (`TextReplacementSummarySection` + `TextReplacementDictionaryDialog` + `TextReplacementEditDialog`) → DetailVM / ReaderVM → `TextReplacementRepository` (`storyReplacementMutex`) → StoryDao → Room DB (`storyReplacementsEnabled` + `storyCustomReplacements` JSON với `caseSensitive: Boolean`) → `ReaderVM` giữ `contentCache` văn bản thô và chạy `processRawChapterContent` (`TextFormatHelper.formatChapter` + `TextReplacementHelper.applyAllReplacementItems` hỗ trợ `ignoreCase = !item.caseSensitive` + `splitIntoParagraphs`) trên `Dispatchers.Default`; bật/tắt format, thay chữ hoặc sửa `caseSensitive` gọi `reprocessCurrentChapter()` tức thì mà không tải lại mạng
+19. **Gửi sang tổng**: `TextReplacementDictionaryDialog` 🌐 → `ReaderVM.sendReplacementToGlobal(from, to, caseSensitive)` → `TextReplacementRepository` (`dataStore.edit` nguyên tử, thêm mới hoặc cập nhật `caseSensitive` tại chỗ) + cập nhật `customReplacements` trong bộ nhớ + `reprocessCurrentChapter()` + `Snackbar` tiếng Việt
 22. **Từ điển Pokémon khi đọc truyện**: `ReaderVM.refreshPokemonMatches(paragraphs, enabled)` → `PokemonRepository.findMatchesInParagraphs()` (lazy-load `assets/pokemon_pokedex.json` + Trie Longest-Match-First trên `Dispatchers.Default`, không đụng chuỗi gốc gửi sang TTS) → `paragraphPokemonMatches` → `ReaderParagraphItem` (render `AnnotatedString` + gạch chân nét đứt `drawBehind`) → chạm vào span tên Pokémon gửi `ReaderIntent.SelectPokemon` → mở `PokemonLookupDialog` (cuộn dọc `verticalScroll`, ảnh chính thức qua Coil 3, huy hiệu 18 hệ tiếng Việt, chuyển đổi hình thái & ngôn ngữ Hán-Việt / Việt / Trung / Anh)
 
 ## Dependencies chính
 
 | Dependency | Version | Mục đích |
 |---|---|---|
-| AGP / Gradle Wrapper | 9.4.0 / 9.6.0 | Android Gradle Plugin & Build System |
+| AGP / Gradle Wrapper | 9.4.1 / 9.6.0 | Android Gradle Plugin & Build System |
 | Kotlin | 2.4.21 | Language + Compose compiler + Serialization plugins |
 | Google KSP | 2.3.12 | Symbol processing (Room 3 + Hilt) |
 | Compose BOM | 2026.05.01 | UI framework |

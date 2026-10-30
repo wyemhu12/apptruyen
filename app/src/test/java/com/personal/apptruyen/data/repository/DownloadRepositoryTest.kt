@@ -243,7 +243,7 @@ class DownloadRepositoryTest {
 
             val emissions = downloadRepository.downloadChapters("s1", chapters).toList()
 
-            assertEquals(750L, testScheduler.currentTime)
+            assertEquals(2_250L, testScheduler.currentTime)
             assertEquals(7, emissions.last().current)
             assertEquals(1, emissions.last().errors)
             assertEquals(8, emissions.last().processed)
@@ -583,4 +583,92 @@ class DownloadRepositoryTest {
             assertTrue(savedSlot.captured.storyReplacementsEnabled)
             assertEquals("a=b", savedSlot.captured.storyCustomReplacements)
         }
+
+    @Test
+    fun `downloadChapters retryPass recovers transiently failed middle chapter without skipping`() =
+        runTest {
+            val chapters =
+                (1..5).map { num ->
+                    Chapter("s1", num, "Chương $num", "https://sstruyen.pics/c$num")
+                }
+
+            var ch2Attempts = 0
+            for (num in listOf(1, 3, 4, 5)) {
+                coEvery { source.getChapterContentWithTitle("https://sstruyen.pics/c$num") } returns
+                    ChapterContentResult("ND $num", "Chương $num: Thật")
+            }
+            coEvery { source.getChapterContentWithTitle("https://sstruyen.pics/c2") } coAnswers {
+                ch2Attempts++
+                if (ch2Attempts <= 3) {
+                    throw ScraperException.NetworkException("Temporary drop on attempt $ch2Attempts")
+                }
+                ChapterContentResult("ND 2", "Chương 2: Đã khôi phục")
+            }
+
+            val emissions = downloadRepository.downloadChapters("s1", chapters).toList()
+
+            assertEquals(5, emissions.last().current)
+            assertEquals(0, emissions.last().errors)
+            assertEquals(5, emissions.last().processed)
+            coVerify(exactly = 1) {
+                chapterDao.saveChapterContent(
+                    storyId = "s1",
+                    chapterNumber = 2,
+                    content = "ND 2",
+                    timestamp = any(),
+                    title = "Chương 2: Đã khôi phục",
+                    url = "https://sstruyen.pics/c2",
+                )
+            }
+            coVerify(exactly = 1) {
+                chapterDao.updateChapterMetadata("s1", 2, "Chương 2: Đã khôi phục", "https://sstruyen.pics/c2")
+            }
+        }
+
+    @Test
+    fun `downloadChapters retryPass on Wikidich waits delay and throws HttpException on 429 immediately`() {
+        val wikiSource = mockk<StorySource>(relaxed = true)
+        every { wikiSource.sourceId } returns "wikidich"
+        every { wikiSource.baseUrl } returns "https://wikicv.org"
+        val wikiRepo =
+            DownloadRepository(
+                setOf(source, wikiSource),
+                storyDao,
+                chapterDao,
+                progressDao,
+                transactionRunner,
+            ).apply {
+                wikidichDelayProvider = { 16_000L }
+            }
+
+        val c1 = Chapter("s1", 1, "Chương 1", "https://wikicv.org/truyen/s1/c1")
+        val c2 = Chapter("s1", 2, "Chương 2", "https://wikicv.org/truyen/s1/c2")
+
+        var c1Attempts = 0
+        coEvery { wikiSource.getChapterContentWithTitle(c1.url) } coAnswers {
+            c1Attempts++
+            if (c1Attempts <= 3) {
+                throw ScraperException.NetworkException("Transient timeout $c1Attempts")
+            }
+            throw ScraperException.HttpException(429, "Too Many Requests")
+        }
+        coEvery { wikiSource.getChapterContentWithTitle(c2.url) } throws
+            ScraperException.NetworkException("Transient timeout c2")
+
+        val scheduler = kotlinx.coroutines.test.TestCoroutineScheduler()
+        val thrown =
+            assertThrows(ScraperException.HttpException::class.java) {
+                runTest(scheduler) {
+                    wikiRepo.downloadChapters("s1", listOf(c1, c2)).toList()
+                }
+            }
+        assertEquals(429, thrown.statusCode)
+        // Batch 1 (c1): 3 attempts -> 5000 + 10000 = 15000ms
+        // Inter-batch delay: 16000ms
+        // Batch 2 (c2): 3 attempts -> 5000 + 10000 = 15000ms
+        // retryPass delay before c1: 16000ms -> total 62000ms
+        assertEquals(62_000L, scheduler.currentTime)
+        coVerify(exactly = 4) { wikiSource.getChapterContentWithTitle(c1.url) }
+        coVerify(exactly = 3) { wikiSource.getChapterContentWithTitle(c2.url) }
+    }
 }

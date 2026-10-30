@@ -36,8 +36,6 @@ class WebViewContentLoader
             // Allowed domains for WebView content loading
             val ALLOWED_DOMAINS =
                 setOf(
-                    "tangthuvien.org",
-                    "tangthuvien.vn",
                     "sstruyen.pics",
                     "sstruyen.vn",
                     "sstruyen.net",

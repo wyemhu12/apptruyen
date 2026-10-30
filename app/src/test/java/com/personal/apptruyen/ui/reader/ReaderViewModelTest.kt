@@ -753,4 +753,109 @@ class ReaderViewModelTest {
                 )
             }
         }
+
+    @Test
+    fun `UpdateStoryReplacement toggles caseSensitive and reprocesses current chapter from cache without network call`() =
+        runTest {
+            var storedJson =
+                """[{"from":"Mây tía","to":"Tử Vân","caseSensitive":false}]"""
+            coEvery {
+                textReplacementRepository.getStoryReplacements("test-story")
+            } answers {
+                com.personal.apptruyen.data.local.StoryReplacementData(
+                    storyReplacementsEnabled = true,
+                    storyCustomReplacements = storedJson,
+                )
+            }
+            coEvery {
+                textReplacementRepository.updateStoryReplacement(
+                    storyId = "test-story",
+                    index = 0,
+                    from = "Mây tía",
+                    to = "Tử Vân",
+                    caseSensitive = true,
+                    expected = any(),
+                )
+            } answers {
+                storedJson = """[{"from":"Mây tía","to":"Tử Vân","caseSensitive":true}]"""
+            }
+            coEvery {
+                repository.getChapterContent("test-story", 1, any())
+            } returns ChapterContentResult(content = "mây tía và Mây tía", title = "Chương 1")
+
+            val viewModel = createViewModel()
+            advanceUntilIdle()
+
+            // Initial: caseSensitive = false -> both replaced
+            assertTrue(
+                viewModel.state.value.content
+                    .contains("Tử Vân và Tử Vân"),
+            )
+
+            clearMocks(repository, answers = false)
+
+            // Toggle caseSensitive to true via UpdateStoryReplacement
+            viewModel.onIntent(
+                ReaderIntent.UpdateStoryReplacement(
+                    index = 0,
+                    from = "Mây tía",
+                    to = "Tử Vân",
+                    caseSensitive = true,
+                ),
+            )
+            advanceUntilIdle()
+
+            // Reprocessed from cache: only exact case "Mây tía" is replaced
+            assertTrue(
+                viewModel.state.value.content
+                    .contains("mây tía và Tử Vân"),
+            )
+            coVerify(exactly = 0) { repository.getChapterContent(any(), any(), any()) }
+        }
+
+    @Test
+    fun `SendReplacementToGlobal updates existing in-memory item when caseSensitive changes and reprocesses chapter`() =
+        runTest {
+            every { dataStore.data } returns
+                flowOf(
+                    preferencesOf(
+                        SettingsKeys.TEXT_REPLACEMENT_ENABLED to true,
+                        SettingsKeys.CUSTOM_REPLACEMENTS to
+                            """[{"from":"Mây tía","to":"Tử Vân","caseSensitive":true}]""",
+                    ),
+                )
+            coEvery {
+                repository.getChapterContent("test-story", 1, any())
+            } returns ChapterContentResult(content = "mây tía và Mây tía", title = "Chương 1")
+            coEvery {
+                textReplacementRepository.sendReplacementToGlobal("Mây tía", "Tử Vân")
+            } returns true
+
+            val viewModel = createViewModel()
+            advanceUntilIdle()
+
+            assertTrue(
+                viewModel.state.value.content
+                    .contains("mây tía và Tử Vân"),
+            )
+
+            // Send same (from, to) with caseSensitive = false -> updates in-memory list and reprocesses
+            viewModel.onIntent(
+                ReaderIntent.SendReplacementToGlobal(
+                    from = "Mây tía",
+                    to = "Tử Vân",
+                    caseSensitive = false,
+                ),
+            )
+            advanceUntilIdle()
+
+            assertEquals(
+                "Đã cập nhật chế độ hoa thường cho \"Mây tía\" → \"Tử Vân\" trong cài đặt chung",
+                viewModel.state.value.snackbarMessage,
+            )
+            assertTrue(
+                viewModel.state.value.content
+                    .contains("Tử Vân và Tử Vân"),
+            )
+        }
 }

@@ -2,9 +2,12 @@ package com.personal.apptruyen.data.repository
 
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
+import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.emptyPreferences
 import com.personal.apptruyen.data.local.ChapterDao
 import com.personal.apptruyen.data.local.DatabaseTransactionRunner
 import com.personal.apptruyen.data.local.SettingsKeys
+import com.personal.apptruyen.data.local.SourceIds
 import com.personal.apptruyen.data.local.StoryDao
 import com.personal.apptruyen.data.local.entity.ChapterEntity
 import com.personal.apptruyen.data.local.entity.StoryEntity
@@ -26,6 +29,8 @@ import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.catch
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.joinAll
@@ -34,7 +39,10 @@ import kotlinx.coroutines.supervisorScope
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withTimeoutOrNull
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import timber.log.Timber
+import java.io.IOException
+import java.util.Locale
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -64,26 +72,45 @@ class StoryRepository
         // Giúp có đủ truyện unique sau dedup (4 sources × 20 truyện/trang × 3 trang = ~240 → dedup ~40-60 unique)
         private val pagesPerBatch = 3
 
-        // ---- Multi-source helper ----
+        // ---- Single-active-source helper ----
+
+        override fun observeActiveSource(): Flow<String> =
+            dataStore.data
+                .catch { e ->
+                    if (e is IOException) {
+                        Timber.w(e, "Failed to read DataStore in observeActiveSource, emitting emptyPreferences")
+                        emit(emptyPreferences())
+                    } else {
+                        throw e
+                    }
+                }.map { prefs -> SourceIds.resolveSingleSource(prefs[SettingsKeys.ENABLED_SOURCES]) }
+                .distinctUntilChanged()
+
+        override suspend fun setActiveSource(sourceId: String) {
+            if (sourceId !in SourceIds.ALL_ACTIVE_SOURCES) return
+            dataStore.edit { prefs ->
+                prefs[SettingsKeys.ENABLED_SOURCES] = sourceId
+                prefs[SettingsKeys.IS_WIKIDICH_MIGRATED] = true
+            }
+        }
 
         /**
-         * Lấy danh sách nguồn đang bật từ DataStore preferences.
-         * Nếu chưa có config, mặc định bật tất cả.
+         * Lấy nguồn duy nhất đang hoạt động từ DataStore preferences.
+         * Nếu chưa có config, mặc định dùng SourceIds.DEFAULT_SINGLE_SOURCE.
          */
         private suspend fun activeSources(): Set<@JvmSuppressWildcards StorySource> {
             dataStore.migrateWikidichEnabledSourcesIfNeeded()
-            val enabledIds =
+            val raw =
                 try {
-                    dataStore.data
-                        .first()[SettingsKeys.ENABLED_SOURCES]
-                        ?.split(",")
-                        ?.filter { it.isNotBlank() }
-                        ?.toSet()
+                    dataStore.data.first()[SettingsKeys.ENABLED_SOURCES]
                 } catch (e: Exception) {
                     if (e is CancellationException) throw e
+                    Timber.w(e, "Failed to read enabled sources from DataStore, falling back to default single source")
                     null
-                } ?: return sources
-            return sources.filter { it.sourceId in enabledIds }.ifEmpty { sources }.toSet()
+                }
+            val activeId = SourceIds.resolveSingleSource(raw)
+            val matched = sources.filter { it.sourceId == activeId }.toSet()
+            return matched.ifEmpty { sources.take(1).toSet() }
         }
 
         /**
@@ -125,7 +152,10 @@ class StoryRepository
             return startPage until (startPage + pagesPerBatch)
         }
 
-        override suspend fun getCompletedStories(page: Int): List<Story> =
+        override suspend fun getCompletedStories(
+            page: Int,
+            maleOnly: Boolean,
+        ): List<Story> =
             supervisorScope {
                 activeSources()
                     .filter {
@@ -144,7 +174,7 @@ class StoryRepository
                                             async {
                                                 try {
                                                     withTimeoutOrNull(timeoutMs) {
-                                                        source.getCompletedStories(p)
+                                                        source.getCompletedStories(p, maleOnly)
                                                     } ?: emptyList()
                                                 } catch (e: Exception) {
                                                     if (e is CancellationException) throw e
@@ -196,6 +226,7 @@ class StoryRepository
             page: Int,
             minChapters: Int,
             completedOnly: Boolean,
+            maleOnly: Boolean,
         ): List<Story> =
             supervisorScope {
                 val allResults =
@@ -215,7 +246,7 @@ class StoryRepository
                                                         // SST: bỏ/thêm ?loc=hoan-thanh
                                                         // Wikidich: /tim-kiem?... (kèm session nếu có)
                                                         withTimeoutOrNull(timeoutMs) {
-                                                            source.getStoriesByGenre(genreSlug, p, 0, completedOnly)
+                                                            source.getStoriesByGenre(genreSlug, p, 0, completedOnly, maleOnly)
                                                         } ?: emptyList()
                                                     } catch (e: Exception) {
                                                         if (e is CancellationException) throw e
@@ -317,6 +348,9 @@ class StoryRepository
         override suspend fun searchStories(
             keyword: String,
             completedOnly: Boolean,
+            page: Int,
+            maleOnly: Boolean,
+            genreSlug: String?,
         ): List<Story> =
             supervisorScope {
                 activeSources()
@@ -328,7 +362,16 @@ class StoryRepository
                             try {
                                 val timeoutMs = timeoutFor(source)
                                 withTimeoutOrNull(timeoutMs) {
-                                    val result = source.search(keyword, completedOnly)
+                                    val result =
+                                        if (source.sourceId != SourceIds.WIKIDICH &&
+                                            page == 1 &&
+                                            maleOnly &&
+                                            genreSlug == null
+                                        ) {
+                                            source.search(keyword, completedOnly)
+                                        } else {
+                                            source.search(keyword, completedOnly, page, maleOnly, genreSlug)
+                                        }
                                     Timber.tag("StoryRepo").d(
                                         "%s search '%s' returned %d results",
                                         source.sourceName,
@@ -438,13 +481,19 @@ class StoryRepository
                     existingTotal = existingEntity?.totalChapters ?: 0,
                     dbChapterCount = dbChapterCount,
                 )
-            val resolvedStory = story.copy(id = resolvedId, totalChapters = safeTotal)
+            val safeCoverUrl = resolveSafeCoverUrl(story.coverImageUrl, existingEntity?.coverImageUrl)
+            val resolvedStory =
+                story.copy(
+                    id = resolvedId,
+                    totalChapters = safeTotal,
+                    coverImageUrl = safeCoverUrl,
+                )
             val entity =
                 resolvedStory.toEntity().let { e ->
                     if (existingEntity != null) {
                         e.copy(
                             totalChapters = safeTotal,
-                            coverImageUrl = resolveSafeCoverUrl(resolvedStory.coverImageUrl, existingEntity.coverImageUrl),
+                            coverImageUrl = safeCoverUrl,
                             isInLibrary = existingEntity.isInLibrary,
                             addedTimestamp = existingEntity.addedTimestamp,
                             storyReplacementsEnabled = existingEntity.storyReplacementsEnabled,
@@ -453,7 +502,7 @@ class StoryRepository
                     } else {
                         e.copy(
                             totalChapters = safeTotal,
-                            coverImageUrl = resolveSafeCoverUrl(resolvedStory.coverImageUrl, null),
+                            coverImageUrl = safeCoverUrl,
                         )
                     }
                 }
@@ -488,13 +537,53 @@ class StoryRepository
                 return null
             }
 
-            // Fallback cho các nguồn cũ đã ngừng cào trực tuyến (truyencom, truyenfull...) chỉ đọc offline
-            return storyDao.getStoryById(rawSlug)?.takeIf { it.id.isNotBlank() }
+            // Fallback cho các nguồn cũ đã ngừng cào trực tuyến (truyencom, truyenfull, tangthuvien...) chỉ đọc offline
+            val deprecatedSourceId = deprecatedSourceIdForUrl(normalizedUrl)
+            if (deprecatedSourceId != null) {
+                storyDao
+                    .getStoryById("${deprecatedSourceId}_$rawSlug")
+                    ?.takeIf { it.id.isNotBlank() && it.sourceId == deprecatedSourceId }
+                    ?.let { return it }
+                return storyDao
+                    .getStoryById(rawSlug)
+                    ?.takeIf { it.id.isNotBlank() && it.sourceId == deprecatedSourceId }
+            }
+            return storyDao
+                .getStoryById(rawSlug)
+                ?.takeIf { it.id.isNotBlank() && it.sourceId !in SourceIds.ALL_ACTIVE_SOURCES }
+        }
+
+        private fun deprecatedSourceIdForUrl(url: String): String? {
+            val host =
+                url
+                    .trim()
+                    .toHttpUrlOrNull()
+                    ?.host
+                    ?.lowercase(Locale.ROOT)
+                    ?.trimEnd('.')
+                    ?: return null
+            return when {
+                host == "tangthuvien.org" ||
+                    host.endsWith(".tangthuvien.org") ||
+                    host == "tangthuvien.vn" ||
+                    host.endsWith(".tangthuvien.vn") -> SourceIds.TANGTHUVIEN
+                host == "truyencom.com" || host.endsWith(".truyencom.com") -> "truyencom"
+                host == "truyenfull.today" ||
+                    host.endsWith(".truyenfull.today") ||
+                    host == "truyenfull.vn" ||
+                    host.endsWith(".truyenfull.vn") -> "truyenfull"
+                else -> null
+            }
         }
 
         private fun extractStoryId(url: String): String? =
             try {
-                val path = url.trimEnd('/').substringAfterLast("/")
+                val path =
+                    url
+                        .substringBefore("?")
+                        .substringBefore("#")
+                        .trimEnd('/')
+                        .substringAfterLast("/")
                 path.takeIf { it.isNotBlank() }
             } catch (_: Exception) {
                 null
@@ -581,11 +670,13 @@ class StoryRepository
                 Pair(chapters, result.totalPages)
             } catch (e: Exception) {
                 if (e is CancellationException) throw e
+                Timber.tag("StoryRepo").w(e, "Failed to fetch first page chapters for %s", storyUrl)
                 val cached = chapterDao.getChaptersByStoryOnce(storyId)
                 if (cached.isNotEmpty()) {
                     Pair(cached.map { it.toDomain() }, 1)
                 } else {
-                    throw Exception("Không có kết nối mạng và chưa có dữ liệu cache")
+                    if (e is ScraperException) throw e
+                    throw Exception("Không có kết nối mạng và chưa có dữ liệu cache", e)
                 }
             }
 
@@ -615,11 +706,13 @@ class StoryRepository
                 mergeAndInsertChapters(chapters, storyId)
             } catch (e: Exception) {
                 if (e is CancellationException) throw e
+                Timber.tag("StoryRepo").w(e, "Failed to fetch chapter list for %s", storyUrl)
                 val cached = chapterDao.getChaptersByStoryOnce(storyId)
                 if (cached.isNotEmpty()) {
                     cached.map { it.toDomain() }
                 } else {
-                    throw Exception("Không có kết nối mạng và chưa có dữ liệu cache")
+                    if (e is ScraperException) throw e
+                    throw Exception("Không có kết nối mạng và chưa có dữ liệu cache", e)
                 }
             }
 
@@ -836,15 +929,37 @@ internal fun StoryEntity.toDomain(): Story =
         status = status,
     )
 
+/**
+ * Nâng cấp URL sang HTTPS và chuẩn hóa URL ảnh bìa Wikidich.
+ * Khác với Scraper, StoryRepository xử lý truyện từ mọi nguồn truyện (TTV, SsTruyện, Wikidich, imgur...),
+ * do đó việc loại bỏ tham số query 'o' trên '/photo/' chỉ được giới hạn nghiêm ngặt cho host 'wikicv.org'
+ * để tránh làm sai lệch URL của các nguồn khác.
+ */
 internal fun upgradeToHttps(url: String): String {
     val trimmed = url.trim()
-    if (trimmed.startsWith("http://", ignoreCase = true) &&
-        !trimmed.startsWith("http://localhost", ignoreCase = true) &&
-        !trimmed.startsWith("http://127.0.0.1")
-    ) {
-        return "https://" + trimmed.substring(7)
+    val httpsUrl =
+        if (trimmed.startsWith("http://", ignoreCase = true) &&
+            !trimmed.startsWith("http://localhost", ignoreCase = true) &&
+            !trimmed.startsWith("http://127.0.0.1")
+        ) {
+            "https://" + trimmed.substring(7)
+        } else {
+            trimmed
+        }
+    val httpUrl = httpsUrl.toHttpUrlOrNull() ?: return httpsUrl
+    val host = httpUrl.host.lowercase(Locale.ROOT)
+    val isWikidichPhoto =
+        (host == "wikicv.org" || host.endsWith(".wikicv.org")) &&
+            httpUrl.encodedPath.startsWith("/photo/")
+    return if (isWikidichPhoto && httpUrl.queryParameter("o") != null) {
+        httpUrl
+            .newBuilder()
+            .removeAllQueryParameters("o")
+            .build()
+            .toString()
+    } else {
+        httpsUrl
     }
-    return trimmed
 }
 
 internal fun resolveSafeCoverUrl(

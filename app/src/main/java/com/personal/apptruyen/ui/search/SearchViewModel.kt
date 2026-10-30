@@ -2,6 +2,7 @@ package com.personal.apptruyen.ui.search
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.personal.apptruyen.data.local.SourceIds
 import com.personal.apptruyen.data.model.Genre
 import com.personal.apptruyen.data.model.Story
 import com.personal.apptruyen.data.remote.ScraperException
@@ -18,11 +19,13 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import timber.log.Timber
 import javax.inject.Inject
 
 enum class ChapterCountFilter(
@@ -56,10 +59,37 @@ class SearchViewModel
             val selectedGenre: Genre? = null,
             val chapterFilter: ChapterCountFilter = ChapterCountFilter.NONE,
             val completedOnly: Boolean = true, // Mặc định chỉ hiện truyện Full
+            val maleOnly: Boolean = true, // Mặc định lọc Truyện nam trên Wikidich
             val isFilterActive: Boolean = false,
             val currentPage: Int = 1,
             val canLoadMore: Boolean = false,
+            val activeSource: String = SourceIds.DEFAULT_SINGLE_SOURCE,
         )
+
+        companion object {
+            private val NON_MALE_WIKIDICH_GENDERS =
+                setOf(
+                    "ngôn tình",
+                    "đam mỹ",
+                    "bách hợp",
+                    "nữ tần",
+                    "nữ tôn",
+                    "không cp",
+                    "đa nguyên",
+                )
+        }
+
+        private fun hasAnyNonDefaultFilter(
+            genre: Genre?,
+            chapterFilter: ChapterCountFilter,
+            completedOnly: Boolean,
+            maleOnly: Boolean,
+            activeSource: String = _state.value.activeSource,
+        ): Boolean =
+            genre != null ||
+                chapterFilter != ChapterCountFilter.NONE ||
+                !completedOnly ||
+                (activeSource == SourceIds.WIKIDICH && !maleOnly)
 
         private val _state = MutableStateFlow(SearchState())
         val state: StateFlow<SearchState> = _state.asStateFlow()
@@ -94,8 +124,72 @@ class SearchViewModel
                 }
             }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
+        private var lastObservedSource: String? = null
+        private var lastSubmittedQuery: String = ""
+
         init {
             loadGenres()
+            observeActiveSourceChanges()
+        }
+
+        private fun observeActiveSourceChanges() {
+            viewModelScope.launch {
+                repository.observeActiveSource().collectLatest { sourceId ->
+                    val previous = lastObservedSource
+                    lastObservedSource = sourceId
+                    _state.update { it.copy(activeSource = sourceId) }
+                    if (previous != null && previous != sourceId) {
+                        handleActiveSourceSwitched()
+                    }
+                }
+            }
+        }
+
+        private suspend fun handleActiveSourceSwitched() {
+            val newGenres =
+                try {
+                    repository.getGenreList().toImmutableList()
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    Timber.e(e, "Failed to reload genres after source switch")
+                    persistentListOf()
+                }
+            _genres.value = newGenres
+            val current = _state.value
+            val validGenre = current.selectedGenre?.takeIf { g -> newGenres.any { it.slug == g.slug } }
+            val filterActive =
+                hasAnyNonDefaultFilter(
+                    genre = validGenre,
+                    chapterFilter = current.chapterFilter,
+                    completedOnly = current.completedOnly,
+                    maleOnly = current.maleOnly,
+                    activeSource = current.activeSource,
+                )
+            _state.update {
+                it.copy(
+                    selectedGenre = validGenre,
+                    isFilterActive = filterActive,
+                    error = null,
+                )
+            }
+            val s = _state.value
+            if (s.query.trim().isNotBlank() && s.hasSearched) {
+                search()
+            } else if (s.selectedGenre != null) {
+                browseByGenre(s.selectedGenre, s.chapterFilter)
+            } else if (s.isFilterActive) {
+                browseByFilterOnly(s.chapterFilter)
+            } else if (s.hasSearched || (current.selectedGenre != null && validGenre == null)) {
+                clearFilter()
+            }
+        }
+
+        fun selectSource(sourceId: String) {
+            if (sourceId !in SourceIds.ALL_ACTIVE_SOURCES || sourceId == _state.value.activeSource) return
+            viewModelScope.launch {
+                repository.setActiveSource(sourceId)
+            }
         }
 
         private fun loadGenres() {
@@ -114,9 +208,11 @@ class SearchViewModel
         }
 
         fun search() {
-            val query = _state.value.query.trim()
+            val currentState = _state.value
+            val query = currentState.query.trim()
             if (query.isBlank()) return
 
+            lastSubmittedQuery = query
             searchJob?.cancel()
             searchJob =
                 viewModelScope.launch {
@@ -128,15 +224,33 @@ class SearchViewModel
                             canLoadMore = false,
                         )
                     try {
-                        // Keyword search luôn pass completedOnly=false vì hầu hết nguồn
-                        // KHÔNG CÓ status data trong search HTML. Nên trả hết để user thấy nhiều kết quả.
-                        val rawResults = repository.searchStories(query, completedOnly = false)
+                        val isWikidich = _state.value.activeSource == SourceIds.WIKIDICH
+                        val rawResults =
+                            if (isWikidich) {
+                                repository.searchStories(
+                                    keyword = query,
+                                    completedOnly = _state.value.completedOnly,
+                                    page = 1,
+                                    maleOnly = _state.value.maleOnly,
+                                    genreSlug = _state.value.selectedGenre?.slug,
+                                )
+                            } else {
+                                // Keyword search trên TTV / SsTruyện luôn pass completedOnly=false
+                                // vì HTML kết quả không có status đầy đủ, lọc client-side qua applyLocalFilters.
+                                repository.searchStories(query, completedOnly = false)
+                            }
                         val filtered = applyLocalFilters(rawResults).toImmutableList()
+                        val canLoadMore =
+                            isWikidich &&
+                                rawResults.isNotEmpty() &&
+                                _state.value.chapterFilter == ChapterCountFilter.NONE
                         _state.value =
                             _state.value.copy(
                                 results = filtered,
                                 isLoading = false,
                                 hasSearched = true,
+                                currentPage = 1,
+                                canLoadMore = canLoadMore,
                                 error = null,
                             )
                         if (rawResults.isNotEmpty()) {
@@ -158,67 +272,36 @@ class SearchViewModel
             genre: Genre?,
             chapterFilter: ChapterCountFilter = ChapterCountFilter.NONE,
         ) {
-            val hasKeyword =
-                _state.value.query
-                    .trim()
-                    .isNotBlank()
-            val hasGenre = genre != null
-            val hasChapterFilter = chapterFilter != ChapterCountFilter.NONE
-
-            if (!hasGenre && !hasChapterFilter) {
-                // No filter selected — if keyword exists, re-search; otherwise clear
-                if (hasKeyword) {
-                    search()
-                } else {
-                    clearFilter()
-                }
-                return
-            }
-
-            _state.update {
-                it.copy(
-                    selectedGenre = genre,
-                    chapterFilter = chapterFilter,
-                    isFilterActive = hasGenre || hasChapterFilter,
-                )
-            }
-
-            if (hasKeyword) {
-                // Keyword + filter → search first, then filter client-side
-                search()
-            } else if (genre != null) {
-                // No keyword + genre → server-side genre browsing
-                browseByGenre(genre, chapterFilter)
-            } else if (hasChapterFilter) {
-                browseByFilterOnly(chapterFilter)
-            }
+            applyAllFilters(
+                genre = genre,
+                chapterFilter = chapterFilter,
+                completedOnly = _state.value.completedOnly,
+                maleOnly = _state.value.maleOnly,
+            )
         }
 
         /**
          * Apply all filters at once from the unified FilterBottomSheet.
-         * completedOnly=true là default, nên chỉ tính "active filter" khi user TẮT nó (=false).
+         * completedOnly=true và maleOnly=true là default, nên chỉ tính "active filter" khi user TẮT (=false).
          */
         fun applyAllFilters(
             genre: Genre?,
             chapterFilter: ChapterCountFilter,
             completedOnly: Boolean,
+            maleOnly: Boolean,
         ) {
             val hasKeyword =
                 _state.value.query
                     .trim()
                     .isNotBlank()
-            val hasGenre = genre != null
-            val hasChapterFilter = chapterFilter != ChapterCountFilter.NONE
-            // completedOnly=true là default → không tính là active filter
-            // completedOnly=false = user chủ động tắt → tính là active filter
-            val completedIsNonDefault = !completedOnly
-            val hasAnyFilter = hasGenre || hasChapterFilter || completedIsNonDefault
+            val hasAnyFilter = hasAnyNonDefaultFilter(genre, chapterFilter, completedOnly, maleOnly)
 
             _state.update {
                 it.copy(
                     selectedGenre = genre,
                     chapterFilter = chapterFilter,
                     completedOnly = completedOnly,
+                    maleOnly = maleOnly,
                     isFilterActive = hasAnyFilter,
                 )
             }
@@ -227,7 +310,7 @@ class SearchViewModel
                 search()
             } else if (genre != null) {
                 browseByGenre(genre, chapterFilter)
-            } else if (hasChapterFilter || completedIsNonDefault) {
+            } else if (hasAnyFilter) {
                 browseByFilterOnly(chapterFilter)
             } else if (_state.value.hasSearched) {
                 clearFilter()
@@ -245,6 +328,7 @@ class SearchViewModel
                     selectedGenre = null,
                     chapterFilter = ChapterCountFilter.NONE,
                     completedOnly = true, // Reset về default (Full)
+                    maleOnly = true, // Reset về default (Truyện nam)
                     isFilterActive = false,
                 )
             }
@@ -262,6 +346,7 @@ class SearchViewModel
             genre: Genre,
             chapterFilter: ChapterCountFilter,
         ) {
+            lastSubmittedQuery = ""
             searchJob?.cancel()
             searchJob =
                 viewModelScope.launch {
@@ -273,6 +358,7 @@ class SearchViewModel
                                 page = 1,
                                 minChapters = chapterFilter.minChapters,
                                 completedOnly = _state.value.completedOnly,
+                                maleOnly = _state.value.maleOnly,
                             )
                         _state.update {
                             it.copy(
@@ -297,9 +383,10 @@ class SearchViewModel
         }
 
         /**
-         * Browse stories when only chapter count or completion status filter is selected (no keyword, no genre).
+         * Browse stories when only chapter count, completion status, or male filter is selected (no keyword, no genre).
          */
         private fun browseByFilterOnly(chapterFilter: ChapterCountFilter) {
+            lastSubmittedQuery = ""
             searchJob?.cancel()
             searchJob =
                 viewModelScope.launch {
@@ -313,7 +400,11 @@ class SearchViewModel
                         )
                     }
                     try {
-                        val rawStories = repository.getCompletedStories(page = 1)
+                        val rawStories =
+                            repository.getCompletedStories(
+                                page = 1,
+                                maleOnly = _state.value.maleOnly,
+                            )
                         val filtered = applyLocalFilters(rawStories)
                         _state.update {
                             it.copy(
@@ -339,12 +430,13 @@ class SearchViewModel
         }
 
         /**
-         * Apply genre + chapter count filters on a list of stories (client-side).
+         * Apply genre + chapter count + Wikidich maleOnly filters on a list of stories (client-side).
          */
         private fun applyLocalFilters(stories: List<Story>): List<Story> {
             val genre = _state.value.selectedGenre
             val minChapters = _state.value.chapterFilter.minChapters
             val completedOnly = _state.value.completedOnly
+            val maleOnly = _state.value.maleOnly
 
             return stories.filter { story ->
                 val matchesGenre =
@@ -361,7 +453,15 @@ class SearchViewModel
                         story.status.isBlank() ||
                         story.status.contains("Hoàn thành", ignoreCase = true) ||
                         story.status.contains("Full", ignoreCase = true)
-                matchesGenre && matchesChapters && matchesStatus
+                val matchesMale =
+                    !maleOnly ||
+                        story.sourceId != "wikidich" ||
+                        story.genres.none { g ->
+                            java.text.Normalizer
+                                .normalize(g.trim(), java.text.Normalizer.Form.NFC)
+                                .lowercase() in NON_MALE_WIKIDICH_GENDERS
+                        }
+                matchesGenre && matchesChapters && matchesStatus && matchesMale
             }
         }
 
@@ -372,7 +472,12 @@ class SearchViewModel
                 it.copy(
                     completedOnly = newValue,
                     isFilterActive =
-                        !newValue || it.selectedGenre != null || it.chapterFilter != ChapterCountFilter.NONE,
+                        hasAnyNonDefaultFilter(
+                            genre = it.selectedGenre,
+                            chapterFilter = it.chapterFilter,
+                            completedOnly = newValue,
+                            maleOnly = it.maleOnly,
+                        ),
                 )
             }
             // Re-apply filters if we have results
@@ -395,13 +500,52 @@ class SearchViewModel
             }
         }
 
+        fun toggleMaleFilter() {
+            val newValue = !_state.value.maleOnly
+            _state.update {
+                it.copy(
+                    maleOnly = newValue,
+                    isFilterActive =
+                        hasAnyNonDefaultFilter(
+                            genre = it.selectedGenre,
+                            chapterFilter = it.chapterFilter,
+                            completedOnly = it.completedOnly,
+                            maleOnly = newValue,
+                        ),
+                )
+            }
+            if (_state.value.hasSearched) {
+                val hasKeyword =
+                    _state.value.query
+                        .trim()
+                        .isNotBlank()
+                val genre = _state.value.selectedGenre
+                if (hasKeyword) {
+                    search()
+                } else if (genre != null) {
+                    browseByGenre(genre, _state.value.chapterFilter)
+                } else if (_state.value.isFilterActive) {
+                    browseByFilterOnly(_state.value.chapterFilter)
+                } else {
+                    clearFilter()
+                }
+            }
+        }
+
+        fun loadMore() {
+            loadMoreFilterResults()
+        }
+
         fun loadMoreFilterResults() {
             val current = _state.value
-            if (current.isLoadingMore || !current.isFilterActive || !current.canLoadMore) return
-            // Load more is only for server-side genre browsing (no keyword)
-            if (current.query.trim().isNotBlank()) return
+            if (current.isLoading ||
+                current.isLoadingMore ||
+                !current.canLoadMore ||
+                (!current.isFilterActive && !current.hasSearched)
+            ) {
+                return
+            }
 
-            val genre = current.selectedGenre ?: return
             val nextPage = current.currentPage + 1
             val minChapters = current.chapterFilter.minChapters
 
@@ -411,12 +555,37 @@ class SearchViewModel
                     _state.update { it.copy(isLoadingMore = true) }
                     try {
                         val moreResults =
-                            repository.getStoriesByGenre(
-                                genre.slug,
-                                page = nextPage,
-                                minChapters = minChapters,
-                                completedOnly = current.completedOnly,
-                            )
+                            when {
+                                lastSubmittedQuery.isNotBlank() -> {
+                                    val rawMore =
+                                        repository.searchStories(
+                                            keyword = lastSubmittedQuery,
+                                            completedOnly = current.completedOnly,
+                                            page = nextPage,
+                                            maleOnly = current.maleOnly,
+                                            genreSlug = current.selectedGenre?.slug,
+                                        )
+                                    applyLocalFilters(rawMore)
+                                }
+                                current.selectedGenre != null -> {
+                                    repository.getStoriesByGenre(
+                                        current.selectedGenre.slug,
+                                        page = nextPage,
+                                        minChapters = minChapters,
+                                        completedOnly = current.completedOnly,
+                                        maleOnly = current.maleOnly,
+                                    )
+                                }
+                                current.isFilterActive -> {
+                                    val rawMore =
+                                        repository.getCompletedStories(
+                                            page = nextPage,
+                                            maleOnly = current.maleOnly,
+                                        )
+                                    applyLocalFilters(rawMore)
+                                }
+                                else -> emptyList()
+                            }
                         _state.update {
                             val merged = deduplicateStories(it.results + moreResults)
                             val hasNewItems = merged.size > it.results.size
@@ -442,7 +611,8 @@ class SearchViewModel
 
         fun clearFilter() {
             searchJob?.cancel()
-            _state.value = SearchState()
+            lastSubmittedQuery = ""
+            _state.value = SearchState(activeSource = _state.value.activeSource)
         }
 
         fun searchFromHistory(query: String) {
